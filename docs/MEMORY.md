@@ -28,23 +28,37 @@
 | ADR-001 | 前端零构建（原生 ESM），不引入 Vite/Webpack；删除重复的 `src/index.html` | ✅ 已定 |
 | ADR-002 | PSD 写入用 **pytoshop**、校验用 **psd-tools**，两库职责不合并 | ✅ 已定 |
 | ADR-003 | 成品默认 **RLE 压缩**；边长 > 30000 px 或预估文件 > 1.5 GB 时自动切 PSB。**已解决**：集成 `engine/codecs_accelerator.py` 挂载 `imagecodecs` SIMD C 扩展，写盘吞吐达 200 MB/s | ✅ 已落地（v2.4） |
-| ADR-004 | 超分为正式流水线阶段，以 Provider 接口实现；默认 `lanczos`（零依赖） | ⬜ 待实现 |
-| ADR-005 | 引擎数据契约用 `dataclass`（`eq=False`）；配置契约用 Pydantic v2；边界在 `engine/schemas/` | ⬜ 待实现 |
-| ADR-006 | 本地服务基于标准库，绑定 `127.0.0.1`，强制 `protocol_version = "HTTP/1.1"`，任务模型 `job_id` + SSE | ⏳ 部分实现 |
-| ADR-007 | TAC 上限与黑版生成从 **ICC profile 派生**，禁止硬编码 300% | ⬜ 待实现 |
-| ADR-008 | 安全裁切下限由 `contour_protection` **运行时计算**；preset 中的 718 仅作兜底默认值 | ⬜ 待实现 |
-| ADR-009 | 全链路中间结果落 `intermediate/<run_id>/`，便于回归比对与缺陷复现 | ⬜ 待实现 |
+| ADR-004 | 超分为正式流水线阶段，以 Provider 接口实现；默认 `lanczos`（零依赖） | ✅ 已落地（2026-09-10：RealESRGAN 与确定性 Lanczos 按 `output.mode` 分流——PLATE 线强制非生成式） |
+| ADR-005 | 引擎数据契约用 `dataclass`（`eq=False`）；配置契约用 Pydantic v2；边界在 `engine/schemas/` | 🟡 部分落地（schemas/：manifest、device_config、profile_config、presets 均 dataclass；Pydantic 未引入） |
+| ADR-006 | 本地服务基于标准库，绑定 `127.0.0.1`，强制 `protocol_version = "HTTP/1.1"`，任务模型 `job_id` + SSE | ⏳ 部分实现（WebUI 仍未实现） |
+| ADR-007 | TAC 上限与黑版生成从 **ICC profile 派生**，禁止硬编码 300% | ✅ 已落地（2026-09-10 `engine/core/ink_limiter.py`）。⚠️ **概念修正**：实测 ICC 规范（ISO 15076-1）**不含 TAC 字段**——TAC 上限是印刷工艺参数（ISO 12647-2 / 印厂工艺单），现按印刷条件配置；ICC 负责分色与黑版生成（朴素转换 K=0 无黑版，实测证据见尽调报告 §十二） |
+| ADR-008 | 安全裁切下限由 `contour_protection` **运行时计算**；preset 中的 718 仅作兜底默认值 | ✅ 已落地（2026-09-10 实测 `cut_y_source=contour_protection`，safe_bottom_y=1950，Y=718 退役） |
+| ADR-009 | 全链路中间结果落 `intermediate/<run_id>/`，便于回归比对与缺陷复现 | 🟡 部分落地（manifest 携带 run_id；重建区掩码落 `outputs/<stem>.masks/`） |
 | ADR-010 | 遮挡补全限定 `cv2.inpaint` 与 `LaMaInpaintingProvider`（微边缘 <200px 走 Telea 快速旁路，大区域走 LaMa 频域补全 + 单切片 CPU 熔断） | ✅ 已定（v2.4） |
-| ADR-011 | **双产品线**（PLATE 制版 / DESIGN 设计），共用内核、在 `compose`+`compile` 阶段分叉；preset 用 `output.mode` 选择 | ✅ 已定 |
+| ADR-011 | **双产品线**（PLATE 制版 / DESIGN 设计），共用内核、在 `compose`+`compile` 阶段分叉；preset 用 `output.mode` 选择 | ✅ 已落地（2026-09-10：`--mode plate/design/both` 端到端实测，both 双产物 `.plate.psb`/`.design.psb`） |
 | ADR-012 | 业务图为**封闭 5 类**（壁布/烫金/水墨/屏风/油画）；分割能力采用**零样本模型**（SAM2 + GroundingDINO）；超出 5 类仍转人工 | ✅ 已定（v2.2 修订） |
 | ADR-013 | **AI 能力全面接入，但主分发包保持零重依赖**：torch / sam2 / groundingdino 进 `requirements-ai.txt`，未安装自动降级；硬件层采用 **OpenVINO 异构调度**（GPU.1 RTX 5070 独显优先 + GPU.0 Arc 140T 护盾 + CPU 熔断） | ✅ 已定（v2.4） |
 | ADR-014 | **分块推理与批处理**：≥ 4000 万像素一律 `tiled_inference`（tile 512、步长 448、Hann 余弦平滑过度），GPU 侧按动态 Batch 4 并行吞吐 | ✅ 已定（v2.4） |
 | ADR-015 | 模型放 `models/` 或 `checkpoints/`（不入库），按需加载并校验；启动探测运行时，缺失即降级并在日志明示 | ✅ 已定 |
 | ADR-016 | **Qwen-Image-Layered 作为 DESIGN 线可选分割 Provider**，PLATE 线禁用 | ✅ 已定（v2.3） |
-| ADR-017 | **PLATE 线补齐陷印（trapping）算子**：专色量化 + 变尺寸陷印，输出独立 `_Spot` 通道层 | ⬜ 待实现（v2.3） |
-| ADR-018 | 前端分层控制采用 manifest 契约（`layers.json` + `text_manifest.json`），结构参照 Stratum | ⬜ 待实现（v2.3） |
+| ADR-017 | **PLATE 线补齐陷印（trapping）算子**：专色量化 + 变尺寸陷印，输出独立 `_Spot` 通道层 | ✅ 已接入（2026-09-10：品类可选 `preset.plate_operators.trapping`，需显式配置专色图层来源；屏风品类禁用并在 manifest 如实记录） |
+| ADR-018 | 前端分层控制采用 manifest 契约（`layers.json` + `text_manifest.json`），结构参照 Stratum | 🟡 部分落地（2026-09-10：交付级 `DeliverableManifest` 随产物落盘并全量披露 TAC/生成占比/seed/ICC；前端未接） |
 | ADR-019 | **五维系统完整性与防欺骗代码审核体系**：环境真实探活、零硬编码静态扫描、物理交付物合规、防伪代码落地、真实基准量化，列入最高工程纪律 | ✅ 已落地（v2.4） |
 | ADR-020 | **局部 ROI 裁剪与多核并发超分**：非全画幅图层（印章、题跋、芦雁等）提取紧凑 BBox 并加安全 Padding 局部引导滤波，多核 `ThreadPoolExecutor(max_workers=6)` 并发 | ✅ 已落地（v2.4） |
+
+> ### 2026-09-10 深夜增补（当日落地的新决策，状态以本段为准）
+>
+> | 决策 | 内容 | 实测依据 |
+> | :--- | :--- | :--- |
+> | **双产品线生成内容强隔离**（§3.1 硬边界 1 落地） | PLATE 线禁用一切生成式输出（超分走 Lanczos、补全走 Telea/NS）；DESIGN 线允许生成但逐层落重建区掩码；`plate_purity` 自动校验 | PLATE 产物 `plate_purity_ok=True`、`generated_pixel_ratio=0` |
+> | **RK-16 随机种子固定** | `_seed_everything()` 统一固定 random/numpy/torch；CLI `--seed`（默认 42）；manifest 落盘 | 同 seed 双跑 10 层掩模逐像素一致（md5 全同），耗时差 0.4% |
+> | **内核合流（G1）** | 写盘唯一入口收敛到 `core/psd_compiler`；`psb_builder` 降为「dict 层 → LayerDescriptor」适配层；Section 5 权威像素来自超分结果（`section5_planes`） | 内核合流后产物结构与合规指标与合流前一致；Step6 +35s（<10%，反码双向转换代价） |
+> | **ICC 分色路径** | `ColorManager.bgr_to_cmyk_raw(bgr, icc_path)`：ICC 驱动 sRGB→CMYK（相对比色意图）+ transform 缓存；无 ICC 回退朴素转换 | 实测朴素转换 **K=0 无黑版**（深色区 CMY 三色叠印），ICC K=97.7%——ICC 为印前必需项 |
+> | **Preset SSOT（G2）** | 品类语义唯一真相源 = `preset.layer_semantics`（name_mapping + layer_attributes）；`load_preset` 收敛 `engine/schemas/presets.py`；provider 内置映射删除 | 三态验证：preset 生效 ✓ / 缺失原样保留 ✓ / 自定义可覆盖内置 ✓ |
+> | **运行时裁切线（ADR-008 落地）** | `contour_protection` 计算 safe_bottom_y，历史硬编码 Y=718 退役 | 实测 `cut_y_source=contour_protection`，safe_bottom_y=1950 |
+>
+> 性能基线更新（内核合流后，scale=4.0 全画幅）：PLATE 276.9s / DESIGN 228.6s；
+> Step6 写盘 PLATE 145s（RLE 恢复后，TAC 稀疏化省 72s）/ DESIGN 24s。
 
 ---
 

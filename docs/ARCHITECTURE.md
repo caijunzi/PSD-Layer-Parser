@@ -47,7 +47,7 @@ pipelines  ──►  operators  ──►  core  ──►  numpy / OpenCV / Pi
 1. `core/` **不得** import `operators/` 或 `pipelines/`（内核必须品类无关，G1）。
 2. `operators/` 之间不得互相 import（无状态纯函数，§6.1）。
 3. `core/` 中不得出现品类关键词（damask / gold / ink / screen），由 Tier 2 静态扫描断言。
-4. 只有 `psd_compiler` / `UniversalPSBBuilder` 能写文件；pipeline 不得直接写 PSD。
+4. **只有 `core/psd_compiler` 能写 PSD/PSB 文件**（2026-09-10 内核合流：`UniversalPSBBuilder` 已降级为「引擎 dict 层 → 内核 `LayerDescriptor`」的数据适配层，写盘全部委托内核；§6 的写盘提速数据为优化前历史对照）；pipeline 不得直接写 PSD。
 5. AI 依赖只能通过 Provider 接口进入，业务代码不得直接绑死特定重量级框架。
 
 ---
@@ -123,3 +123,42 @@ pipelines  ──►  operators  ──►  core  ──►  numpy / OpenCV / Pi
 | **[Step 5] 阶梯引导式超分辨率** | 92.28s | **14.78s** | **6.24x ⚡** | 局部 ROI 包围盒裁剪 + 6 核 ThreadPool 并行 |
 | **[Step 6] 16K PSB 编码与写盘** | 1141.65s (19分) | **27.66s (0.46分)** | **41.3x ⚡** | imagecodecs SIMD C 扩展 (200 MB/s) |
 | **端到端总耗时 (Total)** | **1468.70s (24.5分)** | **168.00s (2.80分)** | **8.74x 🚀** | **整图生产提速 8.74 倍**（注：192.66s 与 168.00s 的分项差为测量口径差异，以实测为准） |
+
+---
+
+## 7. 实现状态注记（2026-09-11 凌晨，内核合流后）
+
+> 上文 §6 的 8.74× 是「相对纯 Python 初版」的优化对照（历史基线）；**当前双产品线基线**如下。
+
+### 7.1 写盘路径（G1 已收敛）
+
+```
+run_universal_engine（引擎 dict 层结构）
+        │
+        ▼
+UniversalPSBBuilder  ←  仅做数据适配：dict 层 → core.LayerDescriptor（逻辑墨量/RGBA + 紧凑 bbox），
+        │                 Section 5 权威像素来自超分结果（context.section5_planes）
+        ▼
+core.PsdCompiler.compile_psd  ←  唯一写盘方：通道构造（ColorChannel 枚举）、反码唯一转换点
+        │                         （_to_disk）、PSD/PSB 版本决策、RLE 探测、分辨率块 0x03ED
+        ▼
+pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
+```
+
+### 7.2 双产品线当前基线（scale=4.0 全画幅，`--seed 42`）
+
+| | PLATE 制版线 | DESIGN 设计线 |
+| :--- | :--- | :--- |
+| 端到端 | **276.9s** | **228.6s** |
+| 产物 | CMYK（mode=4），1.73 GB | RGB（mode=3），1.45 GB |
+| 超分 | Lanczos 阶梯（非生成式） | RealESRGAN（生成式，Arc 140T） |
+| 补全 | Telea/NS 确定性 | LaMa（GPU.1） |
+| 合规 | TAC≤300%、MaxK≤96%、`plate_purity_ok=True` | 生成内容逐层落重建区掩码 |
+| sidecar | `<name>.manifest.json` + `<name>.masks/` | 同左 |
+
+### 7.3 已知约束
+
+- 分割（GroundingDINO/SAM2）为 torch 路径，RTX 5070（sm_120）需 torch ≥2.7 才可用，
+  当前跑 CPU——升级后 Step1（现 ~62-124s）有望大幅下降（见尽调报告 §十）
+- `--scale` CLI 参数会被 preset 的 `super_res_scale` 覆盖（优先级待修）
+- 封闭 5 类中仅屏风完成端到端验证；新增品类只改 preset（G2）

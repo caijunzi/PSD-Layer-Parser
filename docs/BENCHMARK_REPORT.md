@@ -6,6 +6,13 @@
 > **输出目标**：`outputs/Rosetsu_Master_16k.psb` ($16000 \times 7808$ px，150.0 PPI，11 个独立图层，Section 5 预渲染图)  
 > **执行命令**：`python -u run_universal_engine.py --input inputs/source_4000.jpg --output outputs/Rosetsu_Master_16k.psb --preset japanese_screen_gold --scale 4.0 --dpi 150.0 --profile robust_performance`
 
+> ⚠️ **状态注记（2026-09-11 凌晨）**：本章数据为 2026-09-10 白天「单产品线（RGB）/psb_builder 直写」
+> 时期的优化对照基线（8.74× 指相对纯 Python 初版），**保留作历史对照**。
+> 内核合流 + 双产品线落地后的当前基线：
+> **PLATE 制版线 276.9s（真 CMYK + ICC 分色 + TAC 合规，Step6 145s）**；
+> **DESIGN 设计线 228.6s（RealESRGAN 生成式超分 + LaMa 补全，Step6 24s）**；
+> `--mode both` 一次产出双份。详见 `docs/技术尽调与代码审查报告_20260910.md` §十二。
+
 ---
 
 ## 一、流水线三阶段真实耗时演进对比表（秒级精确实测）
