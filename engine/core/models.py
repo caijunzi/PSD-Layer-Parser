@@ -146,6 +146,14 @@ class ProcessingContext:
     layers: list[LayerDescriptor] = field(default_factory=list)
     qa_metrics: dict[str, Any] = field(default_factory=dict)
 
+    # ---- Section 5 外部合成图（内核合流 2026-09-10）----
+    # 语义：印前预览/底层合成的权威像素。生产链路来自超分结果，而非从图层重新叠加
+    # ——图层颜色本就裁自同一源，叠加只会引入合成差异。
+    # 空间约定随 output_mode 不同（反码转换仍由编译器唯一执行）：
+    #   PLATE  → (4, H, W) **逻辑墨量**（0=白纸），编译器负责 _to_disk 反转
+    #   DESIGN → (3, H, W) **RGB 显示值**（0=黑，255=白），无反码概念，直接写入
+    section5_planes: Optional[np.ndarray] = None
+
     # ---- 兼容旧字段（旧代码仍在用，保留避免大面积改动）----
     rectified_image: Optional[np.ndarray] = None
     cleaned_mask: Optional[np.ndarray] = None

@@ -1,28 +1,44 @@
-import os
-import gc
+"""引擎 → 内核 的数据适配层（G1 内核合流，2026-09-10）。
+
+合流前的状态
+------------
+`engine/psb_builder.py` 直接操作 pytoshop 写盘，`engine/core/psd_compiler.py`
+从未被生产引用——所谓"内核"实际是摆设（且一跑就崩，见尽调报告 §十）。
+
+合流后的职责划分
+----------------
+- **本类**：把引擎的 dict 层结构（生产语义：mask + 颜色源 + 混合模式）
+  转换为内核的 `LayerDescriptor`（逻辑墨量 / RGBA + bbox），并准备 Section 5；
+- **core.PsdCompiler**：唯一的 PSD/PSB 写盘方——通道构造、反码转换、
+  版本与压缩决策、分辨率块、图层组装全部由内核负责（G1 达成）。
+
+反码约定（易错点，务必区分）
+----------------------------
+- `ColorManager.bgr_to_cmyk_raw()` 返回 **PSD 磁盘反码**（255 = 0% 墨），
+  TAC 压制（`ink_limiter.limit_ink`）在该空间进行；
+- `LayerDescriptor.cmyk_channels` 是**逻辑墨量**（0 = 0% 墨），
+  编译器在 `_to_disk()` 统一反转。
+⇒ 适配层必须把压制后的反码再转回逻辑墨量：`logical = 255 - raw`。
+"""
+
+from __future__ import annotations
+
 import cv2
-import struct
 import numpy as np
-from pytoshop import enums, core
-from pytoshop.user import nested_layers
-from pytoshop.image_resources import GenericImageResourceBlock
+from pytoshop import enums
 
 from engine.codecs_accelerator import install_psb_codec_accelerator
 from engine.core.color_manager import ColorManager
-from engine.core.ink_limiter import limit_ink
-install_psb_codec_accelerator()
+from engine.core.ink_limiter import INK_MAX, limit_ink
+from engine.core.models import LayerDescriptor, ProcessingContext
+from engine.core.psd_compiler import PsdCompiler
 
-#: CMYK 图层通道标识（必须用 ColorChannel 枚举，不能用整数索引 0-3；
-#: pytoshop 的 ColorChannelMapping 会把整数 0 解释为 ColorChannel.bitmap）
-CMYK_CHANNELS = (
-    enums.ColorChannel.cyan,
-    enums.ColorChannel.magenta,
-    enums.ColorChannel.yellow,
-    enums.ColorChannel.black,
-)
+install_psb_codec_accelerator()
 
 
 class UniversalPSBBuilder:
+    """引擎数据 → 内核 LayerDescriptor 的适配层（写盘委托 core.PsdCompiler）。"""
+
     def __init__(self, target_w=16000, target_h=7808, dpi=150.0,
                  compression=enums.Compression.rle, color_mode="rgb",
                  icc_path=None, tac_policy=None):
@@ -42,11 +58,14 @@ class UniversalPSBBuilder:
         self.last_tac = None
         #: 最近一次写盘的详细油墨统计（供 manifest 披露）
         self.last_ink_stats = None
+        #: 内核回填的质检指标
+        self.last_qa: dict = {}
 
     @property
     def is_cmyk(self) -> bool:
         return self.color_mode == "cmyk"
 
+    # ---------------- CMYK 转换 + TAC 压制 ----------------
     def _to_cmyk_limited(self, bgr: np.ndarray) -> np.ndarray:
         """BGR → CMYK 磁盘反码，并执行 TAC 压制。
 
@@ -58,167 +77,110 @@ class UniversalPSBBuilder:
         if self.tac_policy is not None:
             # inplace=True：转换产物用完即弃，可安全原地修改（16K 下省一次 500MB 复制）
             raw, stats = limit_ink(raw, self.tac_policy, inplace=True)
-            # 以 Section 5（全画幅）的统计为准对外披露
-            if self.last_ink_stats is None or raw.size > 0:
-                self.last_ink_stats = stats
+            self.last_ink_stats = stats
         return raw
 
-    def _apply_layer_channels(self, ps_layer, crop_bgr: np.ndarray, crop_m: np.ndarray) -> None:
-        """按目标色彩模式写入图层通道。
+    def _raw_to_logical(self, raw: np.ndarray) -> np.ndarray:
+        """磁盘反码 → 内核逻辑墨量（LayerDescriptor 的约定空间）。"""
+        return (INK_MAX - raw.astype(np.int16)).astype(np.uint8)
 
-        CMYK 路径用 `ColorManager.bgr_to_cmyk_raw`（可带 ICC）：
-        返回的已是 PSD 磁盘反码（255 = 0% 墨），与 pytoshop 存储约定一致，
-        因此**不得**再经 `255 - x` 二次反转。
-        """
+    # ---------------- 主入口（签名与合流前一致，调用方零改动）----------------
+    def build_psb(self, output_path: str, src_hr_bgr: np.ndarray,
+                  bg_hr_bgr: np.ndarray, sorted_layers: list,
+                  hr_masks_dict: dict, bg_layer_name: str | None = None) -> str:
+        ctx = ProcessingContext(ppi=self.dpi,
+                                canvas_px=(self.target_w, self.target_h))
+        ctx.output_mode = "PLATE" if self.is_cmyk else "DESIGN"
+
+        # 1) Section 5：印前预览的权威像素来自超分结果（不从图层重新叠加）
         if self.is_cmyk:
-            raw = self._to_cmyk_limited(crop_bgr)  # (4, h, w) uint8 反码
-            for i, cc in enumerate(CMYK_CHANNELS):
-                ps_layer.set_channel(cc, np.ascontiguousarray(raw[i]))
+            raw = self._to_cmyk_limited(src_hr_bgr)                 # 反码
+            ctx.section5_planes = self._raw_to_logical(raw)         # → 逻辑墨量
+            self.last_tac = ColorManager.calculate_tac(raw)
         else:
-            crop_b, crop_g, crop_r = cv2.split(crop_bgr)
-            ps_layer.set_channel(enums.ColorChannel.red, np.ascontiguousarray(crop_r))
-            ps_layer.set_channel(enums.ColorChannel.green, np.ascontiguousarray(crop_g))
-            ps_layer.set_channel(enums.ColorChannel.blue, np.ascontiguousarray(crop_b))
-        ps_layer.set_channel(enums.ColorChannel.transparency, np.ascontiguousarray(crop_m))
+            rgb = cv2.cvtColor(src_hr_bgr, cv2.COLOR_BGR2RGB)
+            ctx.section5_planes = np.ascontiguousarray(rgb.transpose(2, 0, 1))
 
-    def _create_resolution_block(self):
-        """Creates Photoshop 0x03ED (1005) ResolutionInfo block for exact print scaling."""
-        h_res = int(self.dpi * 65536)
-        v_res = int(self.dpi * 65536)
-        # Struct: 4B h_res (16.16), 2B h_unit (1=pixels/in), 2B w_unit (1=in), 4B v_res, 2B v_unit, 2B h_unit
-        data = struct.pack('>IHH IHH', h_res, 1, 1, v_res, 1, 1)
-        return GenericImageResourceBlock(resource_id=1005, name='', data=data)
+        # 2) 底板层（画布最底、全幅）
+        ctx.layers.append(self._make_layer(
+            name=bg_layer_name or "02_纯净金箔大底板_Gold_Base_Clean",
+            color_bgr=bg_hr_bgr,
+            mask=np.full((self.target_h, self.target_w), 255, dtype=np.uint8),
+            full_canvas=True,
+        ))
 
-    def build_psb(self, output_path, src_hr_bgr, bg_hr_bgr, sorted_layers, hr_masks_dict, bg_layer_name="02_纯净金箔大底板_Gold_Base_Clean"):
-        """
-        Compiles all layers and writes a production-grade PSB file.
-        
-        Args:
-            output_path: Target .psb file path
-            src_hr_bgr: Full-resolution source image (BGR)
-            bg_hr_bgr: Full-resolution clean background image (BGR)
-            sorted_layers: List of layer metadata dicts from UI Top to UI Bottom
-            hr_masks_dict: dict of {name: 16K mask_uint8}
-            bg_layer_name: Name for the bottom background layer
-        """
-        out_dir = os.path.dirname(output_path)
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
-        
-        ps_color_mode = enums.ColorMode.cmyk if self.is_cmyk else enums.ColorMode.rgb
-
-        # 1. Section 5 Pre-rendered Merged Composite Channels
-        if self.is_cmyk:
-            # (4, H, W) PSD 磁盘反码；转换后立即做 TAC 压制（印前合规要求）
-            self.last_ink_stats = None
-            comp_channels = self._to_cmyk_limited(src_hr_bgr)
-            # TAC 实测（压制后）随 manifest 披露
-            self.last_tac = ColorManager.calculate_tac(comp_channels)
-        else:
-            self.last_tac = None
-            self.last_ink_stats = None
-            comp_channels = np.stack([
-                np.ascontiguousarray(src_hr_bgr[:, :, 2]),
-                np.ascontiguousarray(src_hr_bgr[:, :, 1]),
-                np.ascontiguousarray(src_hr_bgr[:, :, 0]),
-            ], axis=0)
-
-        # 2. Build layers from UI Top to Bottom
-        layers_to_build = []
-
+        # 3) 内容图层（紧凑 bbox）
         for layer_info in sorted_layers:
-            name = layer_info["name"]
-            if name not in hr_masks_dict:
+            name = str(layer_info.get("name", "")).strip()
+            if not name:
                 continue
-
-            m = hr_masks_dict[name]
-            pts = cv2.findNonZero(m)
-            if pts is None:
+            mask = hr_masks_dict.get(name)
+            if mask is None:
                 continue
-
-            rx, ry, rw, rh = cv2.boundingRect(pts)
-            pad = 8
-            x0 = max(0, rx - pad)
-            y0 = max(0, ry - pad)
-            x1 = min(self.target_w, rx + rw + pad)
-            y1 = min(self.target_h, ry + rh + pad)
-
-            crop_m = m[y0:y1, x0:x1]
-            
-            # 统一成 BGR 裁剪块，再由 _apply_layer_channels 按目标色彩模式落通道
+            # 颜色源：补全层优先用 inpainted 内容，否则源超分图
             if layer_info.get("fixed_color") is not None:
                 fc = layer_info["fixed_color"]
-                crop_bgr = np.empty((*crop_m.shape, 3), dtype=np.uint8)
-                crop_bgr[:, :, 0] = fc[0]
-                crop_bgr[:, :, 1] = fc[1]
-                crop_bgr[:, :, 2] = fc[2]
+                color = np.empty((*mask.shape, 3), dtype=np.uint8)
+                color[:, :, 0], color[:, :, 1], color[:, :, 2] = fc[0], fc[1], fc[2]
             else:
-                # Use inpainted content if available for deoccluded layers, otherwise source
-                color_src = layer_info.get("inpainted_hr_bgr")
-                if color_src is None:
-                    color_src = src_hr_bgr
-                crop_bgr = color_src[y0:y1, x0:x1]
+                # 注意：不能用 `x or y`——numpy 数组参与布尔运算会抛
+                # "truth value of an array is ambiguous"，必须显式判 None
+                color = layer_info.get("inpainted_hr_bgr")
+                if color is None:
+                    color = src_hr_bgr
+            ctx.layers.append(self._make_layer(
+                name=name, color_bgr=color, mask=mask,
+                blend_mode=layer_info.get("blend_mode", "NORMAL"),
+                opacity=int(layer_info.get("opacity", 255)),
+            ))
 
-            # Map blend mode
-            bmode = enums.BlendMode.multiply if layer_info.get("blend_mode") == "MULTIPLY" else enums.BlendMode.normal
-            opacity = layer_info.get("opacity", 255)
-
-            ps_layer = nested_layers.Image(
-                name=name,
-                color_mode=ps_color_mode,
-                blend_mode=bmode,
-                opacity=opacity,
-                top=y0, left=x0, bottom=y1, right=x1
-            )
-            self._apply_layer_channels(ps_layer, crop_bgr, crop_m)
-            layers_to_build.append(ps_layer)
-
-        # 3. Add base background layer at the very bottom (UI Bottom)
-        bg_layer = nested_layers.Image(
-            name=bg_layer_name or "02_纯净金箔大底板_Gold_Base_Clean",
-            color_mode=ps_color_mode,
-            blend_mode=enums.BlendMode.normal,
-            opacity=255,
-            top=0, left=0, bottom=self.target_h, right=self.target_w
-        )
-        bg_alpha = np.full((self.target_h, self.target_w), 255, dtype=np.uint8)
-        self._apply_layer_channels(bg_layer, bg_hr_bgr, bg_alpha)
-        layers_to_build.append(bg_layer)
-
-        # 4. Convert nested layers to PSD document
-        psd_doc = nested_layers.nested_layers_to_psd(
-            layers=layers_to_build,
-            color_mode=ps_color_mode,
-            version=enums.Version.version_2, # PSB Format
+        # 4) 委托内核编译（写盘唯一入口，G1）
+        PsdCompiler.compile_psd(
+            ctx, output_path,
             compression=self.compression,
-            size=(self.target_w, self.target_h)
+            output_mode=ctx.output_mode,
         )
-
-        # 4.1 注入 Unicode 图层名 (luni Tagged Block)
-        # 注意: pytoshop 在 nested_layers_to_psd 内部执行了 reversed(layers) 写入 layer_records
-        # 故 recs[0] 为最底层，recs[-1] 为最顶层，与 reversed(layers_to_build) 精确 1:1 对齐
-        from pytoshop import tagged_block
-        if hasattr(psd_doc, "layer_and_mask_info") and hasattr(psd_doc.layer_and_mask_info, "layer_info"):
-            recs = psd_doc.layer_and_mask_info.layer_info.layer_records
-            for layer_rec, orig_layer in zip(recs, reversed(layers_to_build)):
-                if hasattr(orig_layer, "name") and orig_layer.name:
-                    layer_rec.blocks.append(tagged_block.UnicodeLayerName(orig_layer.name))
-
-        # 5. Inject Print Resolution Info (0x03ED)
-        res_block = self._create_resolution_block()
-        psd_doc.image_resources.blocks.append(res_block)
-
-        # 6. Inject Section 5 Image Data
-        psd_doc.image_data = core.ImageData(
-            channels=comp_channels,
-            compression=self.compression
-        )
-
-        # 7. Stream to disk
-        with open(output_path, "wb") as fd:
-            psd_doc.write(fd)
-
-        del comp_channels
-        gc.collect()
-
+        self.last_qa = dict(ctx.qa_metrics)
         return output_path
+
+    # ---------------- dict 层 → LayerDescriptor ----------------
+    def _make_layer(self, name: str, color_bgr: np.ndarray, mask: np.ndarray,
+                    full_canvas: bool = False,
+                    blend_mode: str = "NORMAL", opacity: int = 255) -> LayerDescriptor:
+        h, w = color_bgr.shape[:2]
+        # 紧凑包围盒（与合流前 psb_builder 的 bbox 语义一致）
+        pts = cv2.findNonZero(mask)
+        if pts is not None and not full_canvas:
+            x, y, bw, bh = cv2.boundingRect(pts)
+            top, bottom, left, right = y, y + bh, x, x + bw
+        else:
+            top, bottom, left, right = 0, h, 0, w
+
+        crop = color_bgr[top:bottom, left:right]
+        alpha = mask[top:bottom, left:right]
+
+        if self.is_cmyk:
+            raw = self._to_cmyk_limited(crop)               # 反码（含 TAC 压制）
+            cmyk = self._raw_to_logical(raw)                # → 逻辑墨量（内核约定）
+            return LayerDescriptor(
+                name=name,
+                layer_type="substrate_cmyk" if full_canvas else "print_cmyk",
+                cmyk_channels=np.ascontiguousarray(cmyk),
+                alpha=np.ascontiguousarray(alpha),
+                visible=True,
+                opacity=int(opacity),
+                blend_mode=str(blend_mode).lower(),
+                bbox=(left, top, right, bottom),
+            )
+        rgba = np.empty((*crop.shape[:2], 4), dtype=np.uint8)
+        rgba[:, :, :3] = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        rgba[:, :, 3] = alpha
+        return LayerDescriptor(
+            name=name,
+            layer_type="element_rgba",
+            rgba=np.ascontiguousarray(rgba),
+            visible=True,
+            opacity=int(opacity),
+            blend_mode=str(blend_mode).lower(),
+            bbox=(left, top, right, bottom),
+        )

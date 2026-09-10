@@ -72,10 +72,18 @@ class PsdCompiler:
             size=(canvas_w, canvas_h),
         )
 
-        # 3) Section 5 合成图（R6：由图层叠加推导）
-        if mode == "PLATE":
-            comp = PsdCompiler._composite_plate(context.layers, canvas_w, canvas_h)
-            comp = PsdCompiler._to_disk(comp)
+        # 3) Section 5 合成图
+        #    外部提供（生产链路：超分结果）优先；否则由图层叠加推导（R6）。
+        #    空间约定随 mode 不同（见 ProcessingContext.section5_planes 注释）：
+        #      PLATE  = 逻辑墨量 → 需 _to_disk 反转
+        #      DESIGN = RGB 显示值 → 直接写入
+        s5 = getattr(context, "section5_planes", None)
+        if s5 is not None:
+            comp = PsdCompiler._crop_fit(s5, canvas_h, canvas_w)
+            if mode == "PLATE":
+                comp = PsdCompiler._to_disk(comp)
+        elif mode == "PLATE":
+            comp = PsdCompiler._to_disk(PsdCompiler._composite_plate(context.layers, canvas_w, canvas_h))
         else:
             comp = PsdCompiler._composite_design(context.layers, canvas_w, canvas_h)
         psd.image_data._channels = np.ascontiguousarray(comp)
@@ -109,15 +117,20 @@ class PsdCompiler:
     # ---------------- 压缩决策 ----------------
     @staticmethod
     def rle_supported() -> bool:
-        """
-        ADR-003 默认 RLE，但 pytoshop 的 RLE 依赖 C 扩展 `pytoshop.packbits`；
-        纯 wheel 安装（无 MSVC）时该扩展未编译，`from . import packbits` 会被静默吞掉，
-        直到写文件才抛 `NameError: name 'packbits' is not defined`。这里提前探测。
+        """RLE 可用性 = codecs_accelerator 是否成功注入 pytoshop.codecs。
+
+        历史坑（内核合流时暴露）：本方法原先探测 `from pytoshop import packbits`——
+        这是**另一个顶层模块**，纯 wheel 安装里根本不存在（RLE 能力实际被
+        codecs_accelerator 注入到 `pytoshop.codecs`）。探测与注入不匹配，
+        导致合流后误判 RLE 不可用而回退 ZIP：产物 1.74GB -> 1.05GB、
+        Step6 145s -> 317s。修复为按注入结果判断。
         """
         try:
-            from pytoshop import packbits  # noqa: F401
+            from engine.codecs_accelerator import install_psb_codec_accelerator
+            from pytoshop import codecs
 
-            return hasattr(packbits, "encode")
+            install_psb_codec_accelerator()
+            return enums.Compression.rle in codecs.compressors
         except Exception:
             return False
 
