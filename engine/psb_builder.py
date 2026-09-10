@@ -56,7 +56,8 @@ class UniversalPSBBuilder:
         """
         raw = ColorManager.bgr_to_cmyk_raw(bgr, icc_path=self.icc_path)
         if self.tac_policy is not None:
-            raw, stats = limit_ink(raw, self.tac_policy)
+            # inplace=True：转换产物用完即弃，可安全原地修改（16K 下省一次 500MB 复制）
+            raw, stats = limit_ink(raw, self.tac_policy, inplace=True)
             # 以 Section 5（全画幅）的统计为准对外披露
             if self.last_ink_stats is None or raw.size > 0:
                 self.last_ink_stats = stats

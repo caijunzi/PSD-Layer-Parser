@@ -159,12 +159,15 @@ def icc_summary(icc_path: Optional[str]) -> dict[str, Any]:
     return info
 
 
-def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy) -> tuple[np.ndarray, dict[str, Any]]:
+def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy,
+              inplace: bool = False) -> tuple[np.ndarray, dict[str, Any]]:
     """对 CMYK 数据执行 MaxK 限制 + TAC 压制。
 
     Args:
         cmyk_raw: (4, H, W) uint8，**PSD 磁盘反码**（255 = 0% 墨）
         policy: TAC 策略
+        inplace: True 时直接修改入参（省一次整幅复制）。
+            生产链路中该数组用完即弃，可安全开启；默认 False 保证无副作用。
 
     Returns:
         (压制后的 cmyk_raw, 统计字典)
@@ -181,21 +184,44 @@ def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy) -> tuple[np.ndarray, dict
     limit_v = policy.limit_pct / 100.0 * INK_MAX
     max_k_v = policy.max_k_pct / 100.0 * INK_MAX
 
-    # 快速路径：用整数做 O(H*W) 的两次极值检查，合规数据直接零拷贝返回。
-    # 生产实测该数据超限（330% > 300%），因此走不到这条分支；
-    # 但对已合规的图层/复跑场景可省掉整套 float32 运算。
-    ink_u16 = INK_MAX - cmyk_raw.astype(np.int16)
-    if int(ink_u16.sum(axis=0).max()) <= limit_v and int(ink_u16[3].max()) <= max_k_v:
-        tac_pct = ink_u16.sum(axis=0) / INK_MAX * 100.0
+    # ---------------------------------------------------------------
+    # 全程整数探测（O(H*W)，不分配 float32 数组）
+    #
+    # 性能背景：初版对整幅图做 float32 转换 + 全数组逐通道运算，
+    # 16K 画幅下一次就分配约 2 GB 临时数组（4 通道 × 1.25 亿像素 × 4B），
+    # 是 Step 6 从 66.9s 涨到 217.5s 的主因。
+    # 而实测超限像素仅占 0.5% 左右 —— 稀疏化后浮点运算量降到千分之五。
+    # ---------------------------------------------------------------
+    # 直接在反码上求和，省掉 int16 中间数组（16K 下省约 250 MB 分配）：
+    #   墨量 = 255 - 反码  ⇒  TAC_int = 4*255 - sum(反码)
+    raw_sum = cmyk_raw.sum(axis=0, dtype=np.uint16)   # 0..1020
+    tac_int = 4 * int(INK_MAX) - raw_sum
+    limit_int = int(np.floor(limit_v))
+
+    tac_before = tac_int.astype(np.float32) / INK_MAX * 100.0
+
+    # 反码越小墨量越大：K 超过 max_k 等价于反码 < ceil(255 - max_k)
+    max_k_raw = int(np.ceil(INK_MAX - max_k_v))
+    k_over = cmyk_raw[3] < max_k_raw
+    # MaxK 生效后再判断 TAC 是否仍超限
+    k_excess = np.maximum(max_k_raw - cmyk_raw[3].astype(np.int16), 0)   # 需削减的 K 墨量
+    over = (tac_int - k_excess) > limit_int
+
+    n_k = int(np.count_nonzero(k_over))
+    n_over = int(np.count_nonzero(over))
+    total_px = int(tac_int.size)
+
+    if n_over == 0 and n_k == 0:
+        # 合规数据：零拷贝返回
         return cmyk_raw, {
             "tac_limit_pct": round(policy.limit_pct, 2),
             "max_k_pct": round(policy.max_k_pct, 2),
             "tac_source": policy.source,
             "tac_condition": policy.condition_id,
-            "tac_before_max": round(float(tac_pct.max()), 2),
-            "tac_before_mean": round(float(tac_pct.mean()), 2),
-            "tac_after_max": round(float(tac_pct.max()), 2),
-            "tac_after_mean": round(float(tac_pct.mean()), 2),
+            "tac_before_max": round(float(tac_before.max()), 2),
+            "tac_before_mean": round(float(tac_before.mean()), 2),
+            "tac_after_max": round(float(tac_before.max()), 2),
+            "tac_after_mean": round(float(tac_before.mean()), 2),
             "tac_clipped_pixels": 0,
             "tac_clipped_ratio": 0.0,
             "k_clipped_pixels": 0,
@@ -203,38 +229,35 @@ def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy) -> tuple[np.ndarray, dict
             "fast_path": True,
         }
 
-    ink = (INK_MAX - cmyk_raw.astype(np.float32))          # 墨量 0..255
-    tac_before = ink.sum(axis=0) / INK_MAX * 100.0         # (H,W) 百分比
+    # inplace=True 时省掉整幅复制（16K 下约 500 MB），调用方需保证入参可被修改
+    out = cmyk_raw if inplace else cmyk_raw.copy()
 
-    # 1) MaxK
-    k_clipped = int(np.count_nonzero(ink[3] > max_k_v))
-    ink[3] = np.minimum(ink[3], max_k_v)
+    # 1) MaxK：反码向上取整（反码截断会放大墨量，见下方注释）
+    if n_k:
+        out[3][k_over] = max_k_raw
 
-    # 2) TAC 压制
-    total = ink.sum(axis=0)
-    over = total > limit_v
-    n_over = int(np.count_nonzero(over))
+    # 2) TAC 压制：只对超限像素做浮点运算
     if n_over:
-        cmy_sum = ink[0] + ink[1] + ink[2]
-        avail = np.maximum(limit_v - ink[3], 0.0)
-        ratio = np.where(cmy_sum > 1e-6,
-                         np.minimum(1.0, avail / np.maximum(cmy_sum, 1e-6)),
-                         1.0)
-        ratio = np.where(over, ratio, 1.0)                 # 只压超限像素
-        for i in range(3):
-            ink[i] = ink[i] * ratio
-        # K 自身超限的极端像素
-        k_over = ink[3] > limit_v
-        if k_over.any():
-            ink[3] = np.where(k_over, limit_v, ink[3])
+        idx = np.nonzero(over)
+        c = (INK_MAX - out[0][idx]).astype(np.float32)
+        m = (INK_MAX - out[1][idx]).astype(np.float32)
+        y = (INK_MAX - out[2][idx]).astype(np.float32)
+        k = (INK_MAX - out[3][idx]).astype(np.float32)
+        cmy_sum = c + m + y
+        avail = np.maximum(limit_v - k, 0.0)
+        ratio = np.minimum(1.0, avail / np.maximum(cmy_sum, 1e-6))
+        # 量化方向很关键：反码 = 255 - 墨量，若对反码做截断（floor）会**放大**墨量，
+        # 导致压制后重新审计反而超限（实测 300.0% -> 300.78%）。
+        # 故对反码向上取整（等价于对墨量向下取整），保证量化后墨量 ≤ 目标值。
+        for i, ch in enumerate((c, m, y)):
+            out[i][idx] = np.clip(np.ceil(INK_MAX - ch * ratio), 0, INK_MAX).astype(np.uint8)
+        # K 自身已超限的极端像素
+        k_still_over = k > limit_v
+        if k_still_over.any():
+            sub = idx[0][k_still_over], idx[1][k_still_over]
+            out[3][sub] = int(np.ceil(INK_MAX - limit_v))
 
-    # 量化方向很关键：反码 = 255 - 墨量，若对反码做截断（floor）会**放大**墨量，
-    # 导致压制后重新审计时反而超限（实测 300.0% -> 300.78%）。
-    # 故对反码向上取整（等价于对墨量向下取整），保证量化后墨量 ≤ 目标值。
-    out = np.ceil(np.clip(INK_MAX - ink, 0.0, INK_MAX))
-    out = np.clip(out, 0, INK_MAX).astype(np.uint8)
-    tac_after = (INK_MAX - out.astype(np.float32)).sum(axis=0) / INK_MAX * 100.0
-    total_px = int(tac_before.size)
+    tac_after = (4 * int(INK_MAX) - out.sum(axis=0, dtype=np.uint16)).astype(np.float32) / INK_MAX * 100.0
 
     stats: dict[str, Any] = {
         "tac_limit_pct": round(policy.limit_pct, 2),
@@ -247,7 +270,7 @@ def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy) -> tuple[np.ndarray, dict
         "tac_after_mean": round(float(tac_after.mean()), 2),
         "tac_clipped_pixels": n_over,
         "tac_clipped_ratio": round(n_over / max(1, total_px), 6),
-        "k_clipped_pixels": k_clipped,
+        "k_clipped_pixels": n_k,
         "compliant": bool(float(tac_after.max()) <= policy.limit_pct + 1e-6),
         "fast_path": False,
     }
@@ -255,15 +278,15 @@ def limit_ink(cmyk_raw: np.ndarray, policy: TacPolicy) -> tuple[np.ndarray, dict
 
 
 def audit_tac(cmyk_raw: np.ndarray, policy: TacPolicy) -> dict[str, Any]:
-    """只审计不修改（用于对既有产物做合规复核）。"""
-    ink = (INK_MAX - cmyk_raw.astype(np.float32))
-    tac = ink.sum(axis=0) / INK_MAX * 100.0
+    """只审计不修改（用于对既有产物做合规复核）。整数运算，不分配 float32 全图数组。"""
+    ink_i16 = INK_MAX - cmyk_raw.astype(np.int16)
+    tac = ink_i16.sum(axis=0).astype(np.float32) / INK_MAX * 100.0
     return {
         "tac_limit_pct": round(policy.limit_pct, 2),
         "tac_source": policy.source,
         "tac_max": round(float(tac.max()), 2),
         "tac_mean": round(float(tac.mean()), 2),
-        "max_k_pct": round(float(ink[3].max() / INK_MAX * 100.0), 2),
+        "max_k_pct": round(float(ink_i16[3].max()) / INK_MAX * 100.0, 2),
         "over_limit_ratio": round(float((tac > policy.limit_pct).mean()), 6),
         "compliant": bool(float(tac.max()) <= policy.limit_pct + 1e-6),
     }
