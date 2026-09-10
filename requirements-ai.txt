@@ -1,0 +1,27 @@
+# 可选 AI 依赖（ADR-013）—— 不进主 requirements，未安装时自动降级
+# 安装：pip install -r requirements-ai.txt
+# 模型权重另由 `python scripts/fetch_models.py` 下载到 models/（ADR-015）
+
+# 基础：先按是否有 NVIDIA GPU 选择 torch 版本
+#   CUDA 12.x:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#   CPU only :  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
+torchvision>=0.19
+
+# 异构硬件调度（ADR-013 / ADR-014）：驱动 GPU.1 / GPU.0 / NPU / CPU 与熔断回路
+# 未安装时所有 Provider 自动降级到规则引擎（零依赖路径），不影响出图
+openvino>=2024.4
+
+# 零样本分割（§6.9 分割 Provider）
+# 说明：SAM 2 与 Grounding DINO 官方均提供 pip / 源码两种安装方式，
+# 落地时以官方仓库当前安装说明为准，并把实际 commit/版本号记入 docs/MEMORY.md。
+# 当前工作区以 vendored 源码方式加载（third_party/），通过 sys.path 注入，非 pip 安装。
+# sam2
+# groundingdino
+
+# 无 GPU 环境的轻量兜底（CPU 推理）
+onnxruntime>=1.18        # CPU
+# onnxruntime-gpu>=1.18  # 有 GPU 时改用它
+
+# 可选：元素层软边 alpha 细化（ViTMatte / MODNet，属增强项非必须）
+# 见 docs/UNIVERSAL_LAYER_ENGINE_DEVELOPMENT_PLAN.md §2.1

@@ -1,0 +1,35 @@
+# ---- 大文件与产物（禁止入库）----
+outputs/
+intermediate/
+scratch/
+models/
+checkpoints/
+*.psd
+*.psb
+!test_sec5.psb
+
+# vendored 第三方源码（GroundingDINO / sam2，140 MB）：应改为 submodule 或 pip 依赖，
+# 不随本仓库入库。见 docs/技术尽调与代码审查报告_20260910.md P2-4。
+third_party/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- 环境与密钥 ----
+.env
+.env.*
+*.key
+
+# ---- 系统与编辑器 ----
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,11 @@
+{
+    "preset_name": "western_oil_painting",
+    "description": "西洋古典油画与丙烯绘画通用预设",
+    "background_mode": "sky_or_distant_ground",
+    "panel_count": null,
+    "detect_seals": false,
+    "detect_calligraphy": false,
+    "detect_water_ripples": false,
+    "deocclusion_radius": 11,
+    "super_res_scale": 4.0
+}

@@ -1,0 +1,31 @@
+{
+    "preset_name": "chinese_ink_landscape_ai",
+    "display_name": "中国传统水墨山水画与屏风（AI 增强全智能分层预设）",
+    "description": "基于 Grounding DINO 文本雷达与 SAM 2 级联分割的 16K 终极高保真母版分层方案，中文新手友好。",
+    "background_mode": "paper_or_gold_screen",
+    "panel_count": 6,
+    "dpi": 150.0,
+    "super_res_scale": 4.0,
+    "target_w": 16000,
+    "target_h": 7808,
+    "progressive_stages": [1.5, 2.0, 4.0],
+    "deocclusion_radius": 7,
+    "deocclusion_extension_px": 20,
+    "max_reconstruction_ratio": 0.08,
+    "super_res_engine": "real_esrgan",
+    "tile_size": 512,
+    "tile_pad": 32,
+    "ai_semantic_classes": [
+        {"label_cn": "外框装裱绫边", "prompt": "decorative silk brocade mounting frame", "layer_name": "11A_外框装裱绫边_Brocade_Outer_Frame", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "屏风折痕折缝", "prompt": "vertical folding seam shadow", "layer_name": "11B_屏风折痕折缝_Panel_Fold_Seams", "blend_mode": "MULTIPLY", "opacity": 190},
+        {"label_cn": "长泽鱼朱砂印", "prompt": "red square cinnabar seal stamp", "layer_name": "10_长泽鱼朱砂印_Cinnabar_Seal", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "款识诗文题跋", "prompt": "chinese calligraphy inscription poetry characters", "layer_name": "09_款识诗文题跋_Calligraphy_Inscription", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "高空飞雁群落", "prompt": "flying wild geese birds in sky", "layer_name": "08_高空飞雁群落_Fauna_Geese", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "文人高士侍童", "prompt": "scholar attendants people sitting inside pavilion", "layer_name": "07_文人高士侍童_Figures_Attendants", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "水榭草堂建筑", "prompt": "traditional wooden pavilion architecture house", "layer_name": "06_水榭草堂建筑_Architecture_Pavilion", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "松柏林木植被", "prompt": "pine tree branches foliage vegetation forest", "layer_name": "05_松柏林木植被_Trees_Vegetation", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "近景山石矶岸", "prompt": "rocky mountains cliffs shorelines ground rocks", "layer_name": "04_近景山石矶岸_Mountains_Cliffs", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "远山浅绛烟岚", "prompt": "distant misty hills light ink mountains", "layer_name": "03_远山浅绛烟岚_Distant_Mountains", "blend_mode": "NORMAL", "opacity": 255},
+        {"label_cn": "纯净金箔底板", "prompt": "clean golden background support", "layer_name": "01_纯净金箔底板_Base_Gold_Ground", "blend_mode": "NORMAL", "opacity": 255}
+    ]
+}

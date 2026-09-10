@@ -1,0 +1,20 @@
+# Universal Layer Studio PRO —— 主依赖（零重依赖，禁止出现 torch）
+# 版本依据：2026-09-10 实测安装版本（见 docs/MEMORY.md 实测基线）
+# 约束（ADR-013）：本文件不得包含任何深度学习框架，AI 依赖一律放 requirements-ai.txt
+
+# ---- 核心数组与图像 ----
+numpy>=2.4,<3
+opencv-python>=4.10,<6
+Pillow>=12.0
+scikit-image>=0.24          # 多尺度 Frangi 血管骨架流（分割规则引擎核心），缺失会静默降级
+
+# ---- PSD/PSB 写入与校验（ADR-002：pytoshop 写 / psd-tools 读）----
+psd-tools==1.19.0           # 锁定版本：断言依赖其 API（见 MEMORY.md 校准表）
+pytoshop>=1.2.1
+
+# ---- 写盘加速（ADR-003：C 扩展 SIMD PackBits，200 MB/s）----
+imagecodecs>=2024.1.1       # 主加速路径；缺失时回退纯 Python packbits（约 3 MB/s）
+packbits>=0.6               # 无 imagecodecs 时的兜底编码器
+
+# ---- 暂未启用 ----
+# pydantic>=2.7   # ADR-005 配置契约为 Pydantic v2，状态 ⬜ 待实现；实现后再启用

@@ -1,0 +1,11 @@
+{
+    "preset_name": "traditional_chinese_ink",
+    "description": "中国传统书画（宣纸/绢本水墨工笔）通用预设",
+    "background_mode": "paper_or_gold_screen",
+    "panel_count": null,
+    "detect_seals": true,
+    "detect_calligraphy": true,
+    "detect_water_ripples": true,
+    "deocclusion_radius": 7,
+    "super_res_scale": 4.0
+}

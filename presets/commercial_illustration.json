@@ -1,0 +1,11 @@
+{
+    "preset_name": "commercial_illustration",
+    "description": "现代商业插画与概念设计通用预设",
+    "background_mode": "flat_or_gradient",
+    "panel_count": null,
+    "detect_seals": false,
+    "detect_calligraphy": false,
+    "detect_water_ripples": false,
+    "deocclusion_radius": 5,
+    "super_res_scale": 4.0
+}

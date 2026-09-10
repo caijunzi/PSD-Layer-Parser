@@ -1,0 +1,33 @@
+{
+    "preset_name": "japanese_screen_gold",
+    "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
+    "background_mode": "paper_or_gold_screen",
+    "panel_count": 6,
+    "dpi": 150.0,
+    "super_res_scale": 4.0,
+    "target_w": 16000,
+    "target_h": 7808,
+    "progressive_stages": [1.5, 2.0, 4.0],
+    "deocclusion_radius": 7,
+    "deocclusion_extension_px": 20,
+    "detect_seals": true,
+    "detect_calligraphy": true,
+    "detect_water_ripples": true,
+    "layer_hierarchy": [
+        {"name": "10A_外框与织锦绫边_Brocade_Outer_Frame", "raw_key": "10A_frame", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "10B_屏风折痕折缝_Panel_Fold_Seams", "raw_key": "10B_seams", "blend_mode": "MULTIPLY", "opacity": 190, "fixed_color": [25, 20, 15]},
+        {"name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo", "raw_key": "09A_seal", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "09B_题跋落款墨书_Calligraphy_Inscription", "raw_key": "09B_calligraphy", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "08_芦雁群禽_Geese_Flock", "raw_key": "08_geese", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "07_高士侍童人物_Figures_Scholar_Attendant", "raw_key": "07_figures", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "06_水榭草堂建筑_Architecture_Pavilion", "raw_key": "06_pavilion", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "05A_前景寒林枯木_Foreground_Barren_Trees", "raw_key": "05A_barren_trees", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "05B_中景渚上水木_Midground_Water_Trees", "raw_key": "05B_water_trees", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "raw_key": "04A_foreground_cliffs", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "04D_远山淡墨晴岚_Distant_Soft_Mountain", "raw_key": "04D_distant_mountain", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "04B_中景平渚矶岸_Midground_Shorelines", "raw_key": "04B_shorelines", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "04C_湖心独立孤石_Solitary_Water_Rock", "raw_key": "04C_solitary_rock", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "03_水波微澜墨纹_Water_Ripples", "raw_key": "03_water_ripples", "blend_mode": "NORMAL", "opacity": 255},
+        {"name": "02_纯净金箔大底板_Gold_Base_Clean", "raw_key": "02_gold_base", "blend_mode": "NORMAL", "opacity": 255}
+    ]
+}
