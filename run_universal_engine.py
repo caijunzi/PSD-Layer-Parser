@@ -13,6 +13,17 @@ from typing import Any
 import cv2
 import numpy as np
 
+# Preset 加载唯一入口（SSOT）：provider 与入口脚本共用，避免引擎反向依赖入口脚本
+from engine.schemas.presets import (
+    load_preset as _load_preset_file,
+    match_layer_attributes,
+)
+
+
+def load_preset(preset_arg):
+    """兼容保留：实现已收敛到 engine/schemas/presets.py（SSOT）。"""
+    return _load_preset_file(preset_arg)
+
 from engine.background_extractor import UniversalBackgroundExtractor
 from engine.semantic_segmenter import UniversalSemanticSegmenter
 from engine.depth_layer_sorter import UniversalLayerSorter
@@ -20,23 +31,6 @@ from engine.deocclusion import UniversalDeoccluder
 from engine.tiled_super_res import UniversalTiledSuperRes
 from engine.psb_builder import UniversalPSBBuilder
 from concurrent.futures import ThreadPoolExecutor
-
-def load_preset(preset_arg):
-    # Check if preset_arg is a preset name or file path
-    if os.path.isfile(preset_arg):
-        with open(preset_arg, 'r', encoding='utf-8') as f:
-            return json.load(f)
-            
-    preset_path = os.path.join("presets", f"{preset_arg}.json")
-    if os.path.isfile(preset_path):
-        with open(preset_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-            
-    # Default fallback
-    print(f"Warning: Preset '{preset_arg}' not found, falling back to 'traditional_chinese_ink'")
-    default_path = os.path.join("presets", "traditional_chinese_ink.json")
-    with open(default_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     """PLATE 线印前算子链：轮廓保全 / 微孔刀模 / 专色陷印。
@@ -273,13 +267,12 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     sorter = UniversalLayerSorter()
     sorted_layers = sorter.sort_layers(masks_dict, src_lr)
     
-    # 针对屏风物理折痕，强制赋予 MULTIPLY 正片叠底模式与古雅折痕基色
+    # 图层属性由 preset.layer_semantics.layer_attributes 驱动（SSOT，G2）：
+    # 品类语义（如折痕层的正片叠底与古雅基色）只改 preset，不改内核
     for lyr in sorted_layers:
-        lname = lyr["name"].lower()
-        if "seam" in lname or "fold" in lname or "折痕" in lname or "折缝" in lname:
-            lyr["fixed_color"] = [25, 20, 15]
-            lyr["blend_mode"] = "MULTIPLY"
-            lyr["opacity"] = 190
+        applied = match_layer_attributes(preset, lyr["name"])
+        if applied:
+            lyr.update(applied)
 
     print("  -> Photoshop UI 图层从顶至底排列顺序:")
     for idx, lyr in enumerate(sorted_layers):

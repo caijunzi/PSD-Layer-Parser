@@ -84,6 +84,14 @@ class GroundedSAMProvider:
     ):
         self.preferred_device = preferred_device
         self.preset_name = preset_name
+        # 品类语义由 preset 驱动（SSOT / G2）：检测原始名 → 中英对照图层名 的映射
+        # 归属 preset.layer_semantics.name_mapping，provider 不再内置品类专属映射
+        try:
+            from engine.schemas.presets import load_preset
+            self.preset = load_preset(preset_name)
+        except Exception as e:
+            print(f"[GroundedSAMProvider] preset 加载失败（将回退内置映射）: {e}")
+            self.preset = None
 
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         ckpt_dir = os.path.join(root_dir, "checkpoints")
@@ -298,36 +306,51 @@ class GroundedSAMProvider:
         return results
 
 
+    #: 内置回退映射：preset 未提供 layer_semantics.name_mapping 时使用。
+    #: 新品类应在 preset 中声明映射（G2），而非修改此处。
+    _DEFAULT_NAME_MAPPING = {
+        "01_base_gold_ground": "02_纯净金箔大底板_Gold_Base_Clean",
+        "02_gold_base_clean": "02_纯净金箔大底板_Gold_Base_Clean",
+        "02_water_ripples": "03_水波微澜墨纹_Water_Ripples",
+        "03_water_ripples": "03_水波微澜墨纹_Water_Ripples",
+        "04c_solitary_water_rock": "04C_湖心独立孤石_Solitary_Water_Rock",
+        "04b_midground_shorelines": "04B_中景平渚矶岸_Midground_Shorelines",
+        "04d_distant_soft_mountain": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
+        "04a_foreground_dark_cliffs": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
+        "04_mountains_cliffs_shorelines": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
+        "03_distant_mountains": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
+        "05b_midground_water_trees": "05B_中景渚上水木_Midground_Water_Trees",
+        "05a_foreground_barren_trees": "05A_前景寒林枯木_Foreground_Barren_Trees",
+        "05_trees_vegetation": "05A_前景寒林枯木_Foreground_Barren_Trees",
+        "06_architecture_pavilion": "06_水榭草堂建筑_Architecture_Pavilion",
+        "07_figures_scholar_attendant": "07_高士侍童人物_Figures_Scholar_Attendant",
+        "07_figures_scholar_attendants": "07_高士侍童人物_Figures_Scholar_Attendant",
+        "08_fauna_geese": "08_芦雁群禽_Geese_Flock",
+        "08_geese_flock": "08_芦雁群禽_Geese_Flock",
+        "09b_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
+        "09_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
+        "09a_seal_nagasawa_gyo": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
+        "10_cinnabar_seal": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
+        "10b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
+        "11b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
+        "10a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
+        "11a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
+    }
+
     def _map_to_bilingual_names(self, masks: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        """将英文图层名映射为设计与印厂最高赞誉的【中英对照】标准图层名。"""
-        name_mapping = {
-            "01_base_gold_ground": "02_纯净金箔大底板_Gold_Base_Clean",
-            "02_gold_base_clean": "02_纯净金箔大底板_Gold_Base_Clean",
-            "02_water_ripples": "03_水波微澜墨纹_Water_Ripples",
-            "03_water_ripples": "03_水波微澜墨纹_Water_Ripples",
-            "04c_solitary_water_rock": "04C_湖心独立孤石_Solitary_Water_Rock",
-            "04b_midground_shorelines": "04B_中景平渚矶岸_Midground_Shorelines",
-            "04d_distant_soft_mountain": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
-            "04a_foreground_dark_cliffs": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
-            "04_mountains_cliffs_shorelines": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
-            "03_distant_mountains": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
-            "05b_midground_water_trees": "05B_中景渚上水木_Midground_Water_Trees",
-            "05a_foreground_barren_trees": "05A_前景寒林枯木_Foreground_Barren_Trees",
-            "05_trees_vegetation": "05A_前景寒林枯木_Foreground_Barren_Trees",
-            "06_architecture_pavilion": "06_水榭草堂建筑_Architecture_Pavilion",
-            "07_figures_scholar_attendant": "07_高士侍童人物_Figures_Scholar_Attendant",
-            "07_figures_scholar_attendants": "07_高士侍童人物_Figures_Scholar_Attendant",
-            "08_fauna_geese": "08_芦雁群禽_Geese_Flock",
-            "08_geese_flock": "08_芦雁群禽_Geese_Flock",
-            "09b_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
-            "09_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
-            "09a_seal_nagasawa_gyo": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
-            "10_cinnabar_seal": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
-            "10b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
-            "11b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
-            "10a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
-            "11a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
-        }
+        """将英文图层名映射为设计与印厂通用的【中英对照】标准图层名。
+
+        SSOT（G2）：映射表归属 preset.layer_semantics.name_mapping；
+        本内置表仅为 preset 缺失时的兼容回退。
+        """
+        name_mapping = self._DEFAULT_NAME_MAPPING
+        try:
+            from engine.schemas.presets import get_name_mapping
+            preset_mapping = get_name_mapping(getattr(self, "preset", None) or {})
+            if preset_mapping:
+                name_mapping = preset_mapping
+        except Exception:
+            pass
 
         bilingual = {}
         for k, v in masks.items():
