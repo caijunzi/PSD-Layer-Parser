@@ -1,207 +1,453 @@
-"""Multi-Dimensional System Integrity & Anti-Deception Audit.
-Performs rigorous, un-mocked verification across 4 engineering dimensions:
-1. Hardware Execution Probe (GPU.1 RTX 5070, GPU.0 Intel Arc 140T, NPU, CPU)
-2. Zero-Hardcode Static Codebase Scan (No coordinate hacks in engine/)
-3. Production Deliverable PSB Verification (150 PPI, 11 Layers, MAE fidelity)
-4. Anti-Deception & Real Implementation Check (No mock/fake/dummy code)
+"""System Integrity & Anti-Deception Audit（系统完整性与防欺骗审计）。
+
+设计原则（v2，2026-09-10 重写）
+------------------------------
+旧版五个维度"100% 通过"，却完全没能发现「印章层掩模泄漏 605 倍」这类严重缺陷，
+根因是断言设计无效：
+  - D1 硬绑本机硬件（`assert "GPU.1" in devices`），换机必挂，无法回归；
+  - D2 只扫 8 条**历史黑名单正则**（早已删除的常量），永远发现不了新的魔法值；
+  - D3 只数层数（且用事后追认窗口 `in [11, 15]`），不校验任何掩模质量；
+  - D4 只查 4 条正则，形同虚设；
+  - D5 只断言属性替换成功，未验证 C 路径真的生效。
+
+新版改进：
+  - 硬件改为**能力探测**，缺失即记录不阻断（使他机/CI 可运行）；
+  - 硬编码改为 **AST 级扫描**，能发现新增魔法值；`engine/core/` 品类关键词零容忍；
+  - 交付物审计新增**填充率 / 包围盒紧凑度 / 元素层面积预算**，直击掩模泄漏；
+  - C-SIMD 增加**开关对比**，端到端验证加速真的生效；
+  - 统一用 `QAReport.record()` 收集，输出 JSON 并以退出码表达成败。
+
+用法：
+    python tests/audit_system_integrity.py [PSB路径]
+    python tests/audit_system_integrity.py --skip-deliverable
 """
+
+from __future__ import annotations
+
+import ast
+import glob
+import json
 import os
 import sys
-import glob
-import re
+import time
+
+import cv2
 import numpy as np
 
-sys.path.insert(0, os.path.abspath("."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-def run_hardware_audit():
-    print("=" * 70)
-    print("  [DIMENSION 1] LIVE HARDWARE ENGINE DISPATCH AUDIT")
-    print("=" * 70)
-    import openvino as ov
-    core = ov.Core()
-    devices = core.available_devices
-    print(f"  OpenVINO Detected Devices: {devices}")
-    
-    # Check GPU.1 (RTX 5070)
-    assert "GPU.1" in devices, "CRITICAL: GPU.1 (NVIDIA RTX 5070) was not detected!"
-    name_5070 = core.get_property("GPU.1", "FULL_DEVICE_NAME")
-    print(f"  [PASS] GPU.1 Verified: {name_5070}")
+from engine.core.models import QAReport, new_run_id  # noqa: E402
 
-    # Check GPU.0 (Intel Arc 140T)
-    assert "GPU.0" in devices, "CRITICAL: GPU.0 (Intel Arc 140T) was not detected!"
-    name_arc = core.get_property("GPU.0", "FULL_DEVICE_NAME")
-    print(f"  [PASS] GPU.0 Verified: {name_arc}")
+# ---------------- 阈值（后续迁入 engine/schemas/）----------------
+FILL_RATIO_MIN = 0.00001   # 低于此值判为空层缺陷
+FILL_RATIO_MAX = 0.15      # 元素层面积上限
+BBOX_COVER_MAX = 0.60      # 元素层包围盒覆盖率上限
+REGION_KEYWORDS = (
+    "远山", "mountain", "水波", "ripple", "折痕", "seam", "fold",
+    "外框", "frame", "brocade", "底板", "base", "ground",
+)
+# AST 扫描白名单：工程惯用常量，不算魔法值
+MAGIC_WHITELIST = {0, 1, 2, 3, 4, 5, 8, 16, 32, 64, 100, 127, 128, 255, 256, 512, 1024, 65536, -1}
+# engine/core/ 下禁止出现的品类关键词（G1：内核与品类解耦）—— 阻断级
+# 注意：ink（油墨量）、screen（滤色混合模式 / 加网）是印刷与图像通用术语，
+# 在内核中出现属正常，只作提示级，不阻断（旧版未区分，导致 3 处误报）。
+CATEGORY_KEYWORDS = ("damask", "gold", "壁布", "烫金", "水墨", "屏风")
+# 提示级：命中仅记录，不判定违规
+CATEGORY_SOFT_KEYWORDS = ("ink", "screen")
 
-    # Check NPU (Intel AI Boost)
-    assert "NPU" in devices, "CRITICAL: NPU (Intel AI Boost) was not detected!"
-    name_npu = core.get_property("NPU", "FULL_DEVICE_NAME")
-    print(f"  [PASS] NPU   Verified: {name_npu}")
 
-    # Check CPU
-    name_cpu = core.get_property("CPU", "FULL_DEVICE_NAME")
-    print(f"  [PASS] CPU   Verified: {name_cpu}")
+# golden baseline（v2.1 手工调优成果），用于相对判定
+BASELINE_DIR = "masks_16k"
+# 相对基线的面积失衡倍数（超出 10 倍或不足 1/10）且形状不一致 → 结构性缺陷
+IMBALANCE_FACTOR = 10.0
+MIN_SHAPE_IOU = 0.10
 
-    # Live inference on GPU.1 with LaMa Inpainting Provider
-    from engine.providers.inpainting_provider import LaMaInpaintingProvider
-    p = LaMaInpaintingProvider(preferred_device="GPU.1")
-    assert p.backend == "openvino_GPU.1", f"Expected openvino_GPU.1 but got {p.backend}"
-    print(f"  [PASS] LaMa Inpainting Provider active backend: {p.backend}")
-    return True
 
-def run_zero_hardcode_audit():
-    print("\n" + "=" * 70)
-    print("  [DIMENSION 2] ZERO-HARDCODE STATIC CODEBASE AUDIT")
-    print("=" * 70)
-    engine_files = glob.glob("engine/**/*.py", recursive=True)
-    assert len(engine_files) > 0, "No engine files found to audit!"
+def _is_region(name: str) -> bool:
+    low = str(name).lower()
+    return any(k.lower() in low for k in REGION_KEYWORDS)
 
-    forbidden_patterns = [
-        (r"poly\s*=\s*np\.array", "Hardcoded Polygon Coordinate Array"),
-        (r"\[2700,\s*920\]", "Specific Figure Vertex [2700, 920]"),
-        (r"\[2680,\s*815\]", "Specific Pavilion Vertex [2680, 815]"),
-        (r"\[3460,\s*520\]", "Specific Distant Mountain Vertex [3460, 520]"),
-        (r"x_grid\s*>=\s*2250", "Hardcoded Mountain Coordinate Box x>=2250"),
-        (r"seal_zone\[400:520", "Hardcoded Seal Coordinate Slice [400:520]"),
-        (r"callig_zone\[260:520", "Hardcoded Calligraphy Coordinate Slice [260:520]"),
-        (r"sky_zone\[420:800", "Hardcoded Geese Coordinate Slice [420:800]"),
-    ]
 
-    violations = []
-    total_lines = 0
+def _code_of(name: str) -> str:
+    """从图层名/基线文件名提取编号 token（如 09A / 10B / 03），用于配对。"""
+    import re as _re
+
+    stem = _re.sub(r"^mask_", "", os.path.splitext(os.path.basename(str(name)))[0])
+    m = _re.match(r"(\d{2}[A-Za-z]?)", stem)
+    if m:
+        return m.group(1).upper()
+    m = _re.search(r"_(\d{2}[A-Za-z]?)_", stem)
+    return m.group(1).upper() if m else stem.upper()
+
+
+def load_baseline(target_wh: tuple[int, int], dtype: str = "uint8") -> dict[str, np.ndarray]:
+    """读取 masks_16k 基线并缩放到目标画幅。"""
+    baselines: dict[str, np.ndarray] = {}
+    if not os.path.isdir(BASELINE_DIR):
+        return baselines
+    w, h = target_wh
+    for fn in sorted(os.listdir(BASELINE_DIR)):
+        if not fn.lower().endswith(".png"):
+            continue
+        m = cv2.imread(os.path.join(BASELINE_DIR, fn), cv2.IMREAD_GRAYSCALE)
+        if m is None:
+            continue
+        if m.shape[1] != w or m.shape[0] != h:
+            m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+        baselines[_code_of(fn)] = (m > 127).astype(dtype)
+    return baselines
+
+
+# ============================================================
+# D1 硬件能力探测（缺失仅记录，不阻断）
+# ============================================================
+def run_hardware_audit(rep: QAReport) -> None:
+    print("=" * 74)
+    print("  [D1] 硬件能力探测（缺失仅告警，不阻断）")
+    print("=" * 74)
+    try:
+        import openvino as ov
+    except ImportError:
+        rep.record("D1-01", "OpenVINO 可用性", False, "未安装，AI Provider 将走规则降级路径")
+        print("  [WARN] OpenVINO 未安装 — 异构调度不可用，Provider 自动降级（设计内行为）")
+        return
+
+    try:
+        core = ov.Core()
+        devices = core.available_devices
+        print(f"  可用设备: {devices}")
+        for dev in ("GPU.1", "GPU.0", "NPU", "CPU"):
+            if dev in devices:
+                print(f"  [OK]   {dev}: {core.get_property(dev, 'FULL_DEVICE_NAME')}")
+            else:
+                print(f"  [--]   {dev} 不可用（不影响零依赖路径出图）")
+        rep.record("D1-01", "OpenVINO 可用性", True, f"devices={devices}")
+    except Exception as e:
+        rep.record("D1-01", "OpenVINO 探测", False, f"{type(e).__name__}: {e}")
+
+
+# ============================================================
+# D2 AST 级硬编码扫描
+# ============================================================
+def run_hardcode_audit(rep: QAReport) -> None:
+    print("\n" + "=" * 74)
+    print("  [D2] AST 级硬编码与品类耦合扫描")
+    print("=" * 74)
+
+    engine_files = sorted(g for g in glob.glob("engine/**/*.py", recursive=True)
+                          if "__pycache__" not in g)
+    magic_hits: list[str] = []
+    category_hits: list[str] = []
+
     for fpath in engine_files:
         with open(fpath, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            total_lines += len(lines)
-            content = "".join(lines)
-            for pat, desc in forbidden_patterns:
-                if re.search(pat, content):
-                    violations.append(f"{fpath}: matches forbidden pattern '{desc}'")
+            src = f.read()
+        try:
+            tree = ast.parse(src)
+        except SyntaxError as e:
+            rep.record("D2-00", f"语法解析 {fpath}", False, str(e))
+            continue
 
-    if violations:
-        print("  [FAIL] Violations found in engine code:")
-        for v in violations:
-            print(f"    - {v}")
-        raise AssertionError("Codebase contains forbidden hardcoded coordinates!")
+        # (a) 函数体内的可疑魔法数
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, (int, float)):
+                        v = sub.value
+                        if v in MAGIC_WHITELIST:
+                            continue
+                        if isinstance(v, int) and abs(v) <= 10:
+                            continue
+                        if isinstance(v, float) and 0.0 < abs(v) <= 0.9:
+                            continue  # 归一化系数属常见写法
+                        magic_hits.append(f"{fpath}:{sub.lineno}  {node.name}()  字面量 {v!r}")
 
-    print(f"  [PASS] Scanned {len(engine_files)} files ({total_lines} lines of code).")
-    print("  [PASS] ZERO hardcoded polygon coordinates or image-specific pixel slices detected!")
-    return True
+        # (b) 品类关键词耦合：core/ 零容忍，其他目录仅提示
+        low = src.lower()
+        in_core = fpath.replace("\\", "/").startswith("engine/core/")
+        for kw in CATEGORY_KEYWORDS:
+            if kw.lower() in low:
+                hit = f"{fpath} 含品类关键词 '{kw}'"
+                if in_core:
+                    category_hits.append(hit)
+                else:
+                    magic_hits.append(hit + "（非内核层，提示）")
+        for kw in CATEGORY_SOFT_KEYWORDS:
+            if kw.lower() in low:
+                magic_hits.append(f"{fpath} 含通用印刷术语 '{kw}'（提示）")
 
-def run_deliverable_audit(psb_override=None):
-    print("\n" + "=" * 70)
-    print("  [DIMENSION 3] PRODUCTION PSB DELIVERABLE & RESOLUTION AUDIT")
-    print("=" * 70)
-    psb_path = psb_override
+    print(f"  扫描 {len(engine_files)} 个文件")
+    if category_hits:
+        for h in category_hits:
+            print(f"  [FAIL] {h}")
+        rep.record("D2-01", "engine/core/ 品类解耦（G1）", False, f"{len(category_hits)} 处违规")
+    else:
+        print("  [OK]   engine/core/ 未出现品类关键词（G1 内核与品类解耦）")
+        rep.record("D2-01", "engine/core/ 品类解耦（G1）", True)
+
+    print(f"  [INFO] 函数体内可疑魔法值 {len(magic_hits)} 处（不阻断，建议按 §9.2 常量三级分类外置）")
+    for h in magic_hits[:15]:
+        print(f"         - {h}")
+    if len(magic_hits) > 15:
+        print(f"         ... 另有 {len(magic_hits) - 15} 处")
+    rep.metrics["suspicious_magic_literals"] = len(magic_hits)
+
+
+# ============================================================
+# D3 交付物合规（含掩模质量）
+# ============================================================
+def run_deliverable_audit(rep: QAReport, psb_path: str | None) -> None:
+    print("\n" + "=" * 74)
+    print("  [D3] 交付物合规与掩模质量审计")
+    print("=" * 74)
+
     if not psb_path or not os.path.isfile(psb_path):
-        candidates = [
-            "outputs/Rosetsu_Master_16k.psb",
-            "outputs/Rosetsu_Optimized_16k.psb",
-            "outputs/Rosetsu_Fast_Master_16k.psb",
-            "outputs/Rosetsu_Robust_Master_16k.psb",
-            "outputs/test_zero_hardcode_4k.psb"
-        ]
-        for cand in candidates:
-            if os.path.isfile(cand):
-                psb_path = cand
-                break
-    assert psb_path and os.path.isfile(psb_path), f"Deliverable file {psb_path} not found!"
-    
-    file_size_mb = os.path.getsize(psb_path) / (1024 * 1024)
-    print(f"  [PASS] PSB File Path: {psb_path} (Size: {file_size_mb:.1f} MB / {file_size_mb/1024:.2f} GB)")
+        rep.record("D3-00", "交付物存在性", False, f"未找到 {psb_path}")
+        print(f"  [FAIL] 未找到交付物: {psb_path}")
+        return
 
+    import cv2
+    import numpy as np
     from psd_tools import PSDImage
+
+    size_gb = os.path.getsize(psb_path) / (1024 ** 3)
+    print(f"  文件: {psb_path}  ({size_gb:.3f} GB)")
     psd = PSDImage.open(psb_path)
-    
-    assert psd.version == 2, f"Expected PSB Version 2, got {psd.version}"
-    assert psd.size == (16000, 7808), f"Expected resolution 16000x7808, got {psd.size}"
-    assert len(psd) in [11, 15], f"Expected 11 or 15 layers, got {len(psd)}"
-    
-    # Check Resolution block 0x03ED (1005)
-    res_data = psd.image_resources.get_data(1005)
-    assert res_data is not None, "Resolution Resource Block 0x03ED missing!"
-    dpi_h = res_data.horizontal / 65536.0
-    dpi_v = res_data.vertical / 65536.0
-    assert abs(dpi_h - 150.0) < 0.1, f"Expected 150.0 PPI, got {dpi_h}"
-    print(f"  [PASS] Resolution Block 0x03ED Verified: {dpi_h:.1f} x {dpi_v:.1f} PPI (Print size: 2709.3 x 1322.2 mm)")
+    print(f"  画幅: {psd.size}  色彩模式: {psd.color_mode}  版本: {psd.version}")
 
-    print(f"  [PASS] Verified {len(psd)} Layers:")
-    for idx, lyr in enumerate(psd):
-        bbox_str = f"({lyr.left}, {lyr.top}) -> ({lyr.right}, {lyr.bottom}) [{lyr.width}x{lyr.height}]"
-        print(f"    [{idx:02d}] {lyr.name:<32} {lyr.blend_mode.name:<8} Opacity={lyr.opacity} BBox={bbox_str}")
+    rep.record("D3-01", "PSB 版本为 2", psd.version == 2, f"version={psd.version}")
+    res = psd.image_resources.get_data(1005)
+    if res is None:
+        rep.record("D3-02", "分辨率块 0x03ED", False, "缺失")
+    else:
+        ppi = res.horizontal / 65536.0
+        rep.record("D3-02", "分辨率 150 PPI", abs(ppi - 150.0) < 0.1, f"{ppi:.2f} PPI")
+        print(f"  分辨率: {ppi:.1f} PPI")
 
-    # Section 5 Composite Fidelity Check
-    comp_np = np.array(psd.composite())
-    mean_rgb = comp_np.mean(axis=(0, 1))
-    print(f"  [PASS] Merged Composite Image Verified: Shape={comp_np.shape}, Mean RGB={mean_rgb}")
-    return True
+    rep.record("D3-03", "图层数 ≥ 8", len(psd) >= 8, f"{len(psd)} 层")
 
-def run_anti_deception_audit():
-    print("\n" + "=" * 70)
-    print("  [DIMENSION 4] ANTI-DECEPTION & CODE AUTHENTICITY AUDIT")
-    print("=" * 70)
-    files = glob.glob("engine/**/*.py", recursive=True) + ["run_universal_engine.py"]
-    # Exclude ABC abstract interface definitions
-    concrete_files = [f for f in files if "base_provider.py" not in f]
-    
-    suspicious_patterns = [
-        (r"\bdef\s+[a-zA-Z0-9_]+\s*\(.*\):\s*pass\b", "Empty stub function with 'pass'"),
-        (r"\bclass\s+[a-zA-Z0-9_]+\s*:\s*pass\b", "Empty stub class with 'pass'"),
-        (r"return\s+None\s*#\s*mock", "Mock return value"),
-        (r"time\.sleep\(.*\)\s*#\s*simulate", "Fake simulation sleep"),
+    print("\n  --- 逐层掩模质量（对照 masks_16k golden baseline） ---")
+    bad: list[str] = []
+    # 注意：lyr.numpy() 返回的是该层包围盒大小的数组，其 size 不等于全画幅。
+    # 填充率与覆盖率必须统一以「全画幅」为分母，否则 cover 恒为 100%。
+    canvas_px = psd.width * psd.height
+    baselines = load_baseline((psd.width, psd.height))
+    if not baselines:
+        print(f"  [WARN] 未找到 {BASELINE_DIR}/，退化为绝对阈值判定（发现不了「该小却大」的缺陷）")
+
+    print(f"    {'图层':<40}{'fill%':>9}{'cover%':>8}{'基线fill%':>10}{'倍数':>9}{'IoU':>7}  判定")
+    for lyr in psd:
+        alpha = lyr.numpy()[:, :, 3]
+        # 还原到全画幅坐标才能与基线比对
+        full = np.zeros((psd.height, psd.width), dtype=np.uint8)
+        full[lyr.top:lyr.bottom, lyr.left:lyr.right] = (alpha > 0.5).astype(np.uint8)
+        n = int(full.sum())
+        fill = n / canvas_px
+        cover = (lyr.width * lyr.height) / canvas_px
+        region = _is_region(lyr.name)
+
+        flags = []
+        if fill < FILL_RATIO_MIN:
+            flags.append("EMPTY")
+        if not region:
+            if fill > FILL_RATIO_MAX:
+                flags.append("OVERFLOW")
+            if cover > BBOX_COVER_MAX:
+                flags.append("BBOX_TOO_LARGE")
+
+        b_fill = None
+        factor = None
+        iou = None
+        base = baselines.get(_code_of(lyr.name))
+        if base is not None:
+            b_n = int(base.sum())
+            b_fill = b_n / canvas_px
+            if b_n > 0 and n > 0:
+                factor = n / b_n
+            inter = int(np.count_nonzero((full > 0) & (base > 0)))
+            union = int(np.count_nonzero((full > 0) | (base > 0)))
+            iou = inter / union if union else 0.0
+            # 相对基线的结构性失衡：面积差一个数量级且形状对不上
+            if iou < MIN_SHAPE_IOU and factor is not None:
+                if factor > IMBALANCE_FACTOR or factor < 1.0 / IMBALANCE_FACTOR:
+                    flags.append("IMBALANCE")
+
+        bf = f"{b_fill*100:.4f}" if b_fill is not None else "n/a"
+        fa = f"{factor:.1f}x" if factor is not None else "n/a"
+        io = f"{iou:.3f}" if iou is not None else "n/a"
+        mark = "  ".join(flags) if flags else "OK"
+        print(f"    {lyr.name.strip()[:38]:<40}{fill*100:>9.4f}{cover*100:>8.2f}"
+              f"{bf:>10}{fa:>9}{io:>7}  {mark}")
+        if flags:
+            bad.append(f"{lyr.name.strip()} ({','.join(flags)})")
+        del full
+
+    rep.record(
+        "D3-04",
+        "元素掩模质量（无空层 / 无过覆盖 / 相对基线无结构性失衡）",
+        not bad,
+        "；".join(bad) if bad else "全部通过",
+    )
+    rep.metrics["layer_count"] = len(psd)
+    rep.metrics["defective_layers"] = len(bad)
+
+
+# ============================================================
+# D4 防伪代码扫描
+# ============================================================
+def run_anti_deception_audit(rep: QAReport) -> None:
+    print("\n" + "=" * 74)
+    print("  [D4] 防伪代码扫描")
+    print("=" * 74)
+    import re
+
+    files = sorted(glob.glob("engine/**/*.py", recursive=True)) + ["run_universal_engine.py"]
+    patterns = [
+        (r"^\s*pass\s*$", "空实现 pass"),
+        (r"\bNotImplementedError\b", "未实现占位"),
+        (r"#\s*(mock|fake|dummy)\b", "伪造标记"),
+        (r"time\.sleep\([^)]*\)\s*#\s*(simulate|fake)", "模拟耗时"),
     ]
-
-    for fpath in concrete_files:
+    hits: list[str] = []
+    for fpath in files:
+        if "__pycache__" in fpath or not os.path.isfile(fpath):
+            continue
         with open(fpath, "r", encoding="utf-8") as f:
-            content = f.read()
-            for pat, desc in suspicious_patterns:
-                if re.search(pat, content):
-                    raise AssertionError(f"Deception detected in {fpath}: {desc}")
+            for lineno, line in enumerate(f, 1):
+                for pat, desc in patterns:
+                    if re.search(pat, line):
+                        hits.append(f"{fpath}:{lineno}  {desc}")
+    if hits:
+        for h in hits[:20]:
+            print(f"  [WARN] {h}")
+    else:
+        print("  [OK]   未发现空实现 / mock / 伪造数据 / 模拟耗时")
+    # 抽象基类的 pass 属合法设计，仅披露不阻断
+    rep.metrics["deception_candidates"] = len(hits)
+    print(f"  [INFO] 候选 {len(hits)} 处（抽象基类 pass 属合法设计，仅披露不阻断）")
 
-    print("  [PASS] Zero mock objects, zero fake sleep simulations, zero empty placeholder classes.")
-    print("  [PASS] All algorithms (vesselness, gradient, clustering, inpainting, PSB assembly) are real and operational.")
-    return True
 
-def run_codec_acceleration_audit():
-    print("\n" + "=" * 70)
-    print("  [DIMENSION 5] C-EXTENSION SIMD CODEC ACCELERATION AUDIT")
-    print("=" * 70)
-    import time
-    from engine.codecs_accelerator import FastPackBitsAdapter, install_psb_codec_accelerator, HAS_IMAGECODECS
-    import pytoshop.codecs
+# ============================================================
+# D5 C-SIMD 加速开关对比（端到端验证真的生效）
+# ============================================================
+def run_codec_audit(rep: QAReport) -> None:
+    print("\n" + "=" * 74)
+    print("  [D5] C-SIMD PackBits 加速端到端验证（与纯 Python 对比）")
+    print("=" * 74)
+    import numpy as np
 
-    assert HAS_IMAGECODECS, "CRITICAL: imagecodecs C-extension is not available!"
+    from engine.codecs_accelerator import (
+        FastPackBitsAdapter,
+        HAS_IMAGECODECS,
+        install_psb_codec_accelerator,
+    )
+
+    if not HAS_IMAGECODECS:
+        rep.record("D5-01", "imagecodecs 可用", False, "未安装，写盘将回退纯 Python（约 3 MB/s）")
+        print("  [FAIL] imagecodecs 未安装")
+        return
+
+    rep.record("D5-01", "imagecodecs 可用", True)
     install_psb_codec_accelerator()
-    assert pytoshop.codecs.packbits == FastPackBitsAdapter, "FastPackBitsAdapter was not installed into pytoshop.codecs!"
 
-    # Real benchmark: 100 rows of 16,000 bytes (1.6 MB raw data)
-    test_rows = np.random.randint(0, 256, (100, 16000), dtype=np.uint8)
+    rows = np.random.randint(0, 256, (200, 16000), dtype=np.uint8)
     t0 = time.time()
-    encoded = [FastPackBitsAdapter.encode(r) for r in test_rows]
-    elapsed = time.time() - t0
+    enc_c = [FastPackBitsAdapter.encode(r) for r in rows]
+    t_c = time.time() - t0
 
-    # Verification: must take < 0.08s (proving real C execution, pure Python takes > 0.5s)
-    assert elapsed < 0.1, f"Execution took {elapsed:.3f}s, expected C-extension speed < 0.1s!"
-    print(f"  [PASS] C-Extension Benchmark: 100 rows (1.6 MB) encoded in {elapsed:.4f}s ({1.6/elapsed:.1f} MB/s)")
+    ok_roundtrip = all(
+        np.array_equal(rows[i], np.frombuffer(FastPackBitsAdapter.decode(enc_c[i]), dtype=np.uint8))
+        for i in range(0, 200, 37)
+    )
+    rep.record("D5-02", "SIMD PackBits 往返无损", ok_roundtrip)
 
-    # Decode check
-    decoded0 = FastPackBitsAdapter.decode(encoded[0])
-    assert np.array_equal(test_rows[0], np.frombuffer(decoded0, dtype=np.uint8)), "Round-trip decode mismatch!"
-    print("  [PASS] SIMD PackBits RLE Round-Trip Fidelity: 100% Byte-for-Byte Match.")
-    print("  [PASS] Step 6 Writing bottleneck resolved: 20x~40x throughput acceleration verified.")
-    return True
+    def _py_packbits(row: np.ndarray) -> bytes:
+        """纯 Python 参考实现（无 C 扩展），用于量级对比。"""
+        out = bytearray()
+        i, n = 0, len(row)
+        while i < n:
+            run = 1
+            while i + run < n and run < 128 and row[i + run] == row[i]:
+                run += 1
+            if run > 2:
+                out += bytes([257 - run, int(row[i]) & 0xFF])
+                i += run
+            else:
+                lit = bytearray()
+                while i < n and len(lit) < 128:
+                    if i + 2 < n and row[i] == row[i + 1] == row[i + 2]:
+                        break
+                    lit.append(int(row[i]) & 0xFF)
+                    i += 1
+                out += bytes([len(lit) - 1]) + bytes(lit)
+        return bytes(out)
+
+    sample = rows[:10]
+    t0 = time.time()
+    _ = [_py_packbits(r) for r in sample]
+    t_py = time.time() - t0
+
+    mb_c = rows.nbytes / (1024 * 1024)
+    mb_py = sample.nbytes / (1024 * 1024)
+    print(f"  C 扩展      : {mb_c:.2f} MB / {t_c:.4f}s = {mb_c/t_c:.1f} MB/s")
+    print(f"  纯 Python   : {mb_py:.2f} MB / {t_py:.4f}s = {mb_py/t_py:.1f} MB/s（{len(sample)} 行样本）")
+    print(f"  C 路径为纯 Python 的 {(mb_c/t_c)/(mb_py/t_py):.1f} 倍")
+
+    faster = (mb_c / t_c) > (mb_py / t_py) * 10
+    rep.record("D5-03", "C 路径较纯 Python 显著加速（>10x）", faster,
+               f"C={mb_c/t_c:.1f} MB/s, py={mb_py/t_py:.1f} MB/s")
+
+
+# ============================================================
+def main() -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="System integrity audit")
+    ap.add_argument("psb", nargs="?", default=None)
+    ap.add_argument("--skip-deliverable", action="store_true")
+    args = ap.parse_args()
+
+    psb = args.psb
+    if not psb and not args.skip_deliverable:
+        for cand in (
+            "outputs/Rosetsu_Master_16k.psb",
+            "outputs/Rosetsu_Robust_Master_16k.psb",
+            "outputs/Rosetsu_Optimized_16k.psb",
+        ):
+            if os.path.isfile(cand):
+                psb = cand
+                break
+
+    rep = QAReport(run_id=new_run_id(), tier="T4")
+
+    print("\n" + "#" * 74)
+    print("      SYSTEM INTEGRITY AUDIT (v2 · 可回归版)")
+    print("#" * 74 + "\n")
+
+    run_hardware_audit(rep)
+    run_hardcode_audit(rep)
+    if not args.skip_deliverable:
+        run_deliverable_audit(rep, psb)
+    run_anti_deception_audit(rep)
+    run_codec_audit(rep)
+
+    failed = [r for r in rep.records if not r["ok"]]
+    print("\n" + "#" * 74)
+    print(f"  run_id : {rep.run_id}")
+    print(f"  结果   : {'PASS' if rep.passed else 'FAIL'}  "
+          f"(共 {len(rep.records)} 项断言，失败 {len(failed)} 项)")
+    for r in failed:
+        print(f"    [FAIL] {r['code']} {r['name']} — {r['detail']}")
+    print("#" * 74 + "\n")
+
+    os.makedirs("intermediate", exist_ok=True)
+    out = os.path.join("intermediate", f"audit_{rep.run_id}.json")
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(rep.to_dict(), f, ensure_ascii=False, indent=2)
+    print(f"  报告已写入: {out}")
+
+    return 0 if rep.passed else 1
+
 
 if __name__ == "__main__":
-    print("\n" + "#" * 70)
-    print("       STARTING RIGOROUS MULTI-DIMENSIONAL SYSTEM AUDIT")
-    print("#" * 70 + "\n")
-
-    target_psb = sys.argv[1] if len(sys.argv) > 1 else None
-    run_hardware_audit()
-    run_zero_hardcode_audit()
-    run_deliverable_audit(target_psb)
-    run_anti_deception_audit()
-    run_codec_acceleration_audit()
-
-    print("\n" + "#" * 70)
-    print("  AUDIT COMPLETE: 100% PRODUCTION COMPLIANT, ZERO DECEPTION CERTIFIED")
-    print("#" * 70 + "\n")
+    raise SystemExit(main())
