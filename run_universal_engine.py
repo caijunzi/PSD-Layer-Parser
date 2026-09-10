@@ -131,7 +131,28 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     return summary, extra_layers
 
 
-def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None):
+def _seed_everything(seed: int) -> None:
+    """固定随机源（RK-16：产物可复现是 PLATE 线「可复算」验收的前提）。
+
+    覆盖 random / numpy / torch（可选依赖，缺失时跳过）。
+    注意：不开 torch.use_deterministic_algorithms —— 部分算子无确定性实现会抛错，
+    且会显著拖慢 CPU 推理；先以种子固定为主，算子级确定性按需另行开启。
+    """
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass
+
+
+def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42):
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
     from engine.schemas.manifest import (
@@ -143,6 +164,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     )
     prof_settings = resolve_profile(profile)
     chosen_hw = device if device is not None else prof_settings.primary_device
+    # RK-16：每次 run_pipeline 重置随机源（both 模式两条线各自从头复现）
+    _seed_everything(seed)
 
     mode = OutputMode.parse(output_mode)
     if mode == OutputMode.BOTH:
@@ -158,6 +181,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     print(f"[Engine] Input Image : {input_path}")
     print(f"[Engine] Output PSB  : {output_path}")
     print(f"[Engine] Preset      : {preset_name}")
+    print(f"[Engine] Random Seed : {seed} (RK-16 reproducibility)")
     print(f"[Engine] Output Mode : {mode.value.upper()} "
           f"({'CMYK 制版线 · 禁用生成内容' if is_plate else 'RGBA 设计线 · 生成内容须标记'})")
     print(f"[Engine] Profile     : {prof_settings.display_name}")
@@ -512,6 +536,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     man.totals["deocclusion_engine"] = inpaint_engine
     man.totals["deocclusion_generative"] = bool(getattr(inpaint_provider, "is_generative", False))
     man.totals["deocclusion_pixel_count"] = total_recon_px
+    man.totals["random_seed"] = int(seed)
     if getattr(builder, "last_tac", None):
         man.totals["tac_max_pct"] = round(float(builder.last_tac[0]), 2)
         man.totals["tac_mean_pct"] = round(float(builder.last_tac[1]), 2)
@@ -588,6 +613,12 @@ if __name__ == "__main__":
              "注意：TAC 上限来自印刷工艺参数，不在 ICC 中",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="全局随机种子（RK-16：固定后两次运行的分割掩模应逐像素一致）",
+    )
+    parser.add_argument(
         "--mode",
         choices=["plate", "design", "both"],
         default=None,
@@ -629,4 +660,5 @@ if __name__ == "__main__":
             profile=args.profile,
             output_mode=job_mode.value,
             icc_override=args.icc,
+            seed=args.seed,
         )
