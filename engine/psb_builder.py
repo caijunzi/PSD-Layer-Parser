@@ -8,15 +8,54 @@ from pytoshop.user import nested_layers
 from pytoshop.image_resources import GenericImageResourceBlock
 
 from engine.codecs_accelerator import install_psb_codec_accelerator
+from engine.core.color_manager import ColorManager
 install_psb_codec_accelerator()
 
+#: CMYK 图层通道标识（必须用 ColorChannel 枚举，不能用整数索引 0-3；
+#: pytoshop 的 ColorChannelMapping 会把整数 0 解释为 ColorChannel.bitmap）
+CMYK_CHANNELS = (
+    enums.ColorChannel.cyan,
+    enums.ColorChannel.magenta,
+    enums.ColorChannel.yellow,
+    enums.ColorChannel.black,
+)
+
+
 class UniversalPSBBuilder:
-    def __init__(self, target_w=16000, target_h=7808, dpi=150.0, compression=enums.Compression.rle):
+    def __init__(self, target_w=16000, target_h=7808, dpi=150.0,
+                 compression=enums.Compression.rle, color_mode="rgb"):
         install_psb_codec_accelerator()
         self.target_w = target_w
         self.target_h = target_h
         self.dpi = float(dpi)
         self.compression = compression
+        self.color_mode = str(color_mode).lower()
+        if self.color_mode not in ("rgb", "cmyk"):
+            raise ValueError(f"未知 color_mode: {color_mode}（只允许 rgb / cmyk）")
+        #: 最近一次写盘的 TAC 实测值 (max_pct, mean_pct)，仅 CMYK 有值
+        self.last_tac = None
+
+    @property
+    def is_cmyk(self) -> bool:
+        return self.color_mode == "cmyk"
+
+    def _apply_layer_channels(self, ps_layer, crop_bgr: np.ndarray, crop_m: np.ndarray) -> None:
+        """按目标色彩模式写入图层通道。
+
+        CMYK 路径直接用 `ColorManager.bgr_to_cmyk_raw`：它返回的已是
+        PSD 磁盘反码（255 = 0% 墨），与 pytoshop 存储约定一致，
+        因此**不得**再经 `255 - x` 二次反转。
+        """
+        if self.is_cmyk:
+            raw = ColorManager.bgr_to_cmyk_raw(crop_bgr)  # (4, h, w) uint8 反码
+            for i, cc in enumerate(CMYK_CHANNELS):
+                ps_layer.set_channel(cc, np.ascontiguousarray(raw[i]))
+        else:
+            crop_b, crop_g, crop_r = cv2.split(crop_bgr)
+            ps_layer.set_channel(enums.ColorChannel.red, np.ascontiguousarray(crop_r))
+            ps_layer.set_channel(enums.ColorChannel.green, np.ascontiguousarray(crop_g))
+            ps_layer.set_channel(enums.ColorChannel.blue, np.ascontiguousarray(crop_b))
+        ps_layer.set_channel(enums.ColorChannel.transparency, np.ascontiguousarray(crop_m))
 
     def _create_resolution_block(self):
         """Creates Photoshop 0x03ED (1005) ResolutionInfo block for exact print scaling."""
@@ -42,11 +81,21 @@ class UniversalPSBBuilder:
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         
-        # 1. Section 5 Pre-rendered Merged Composite Channels (R, G, B)
-        comp_r = np.ascontiguousarray(src_hr_bgr[:, :, 2])
-        comp_g = np.ascontiguousarray(src_hr_bgr[:, :, 1])
-        comp_b = np.ascontiguousarray(src_hr_bgr[:, :, 0])
-        comp_channels = np.stack([comp_r, comp_g, comp_b], axis=0)
+        ps_color_mode = enums.ColorMode.cmyk if self.is_cmyk else enums.ColorMode.rgb
+
+        # 1. Section 5 Pre-rendered Merged Composite Channels
+        if self.is_cmyk:
+            # (4, H, W) PSD 磁盘反码（255 = 0% 墨），与磁盘约定一致，不再二次反转
+            comp_channels = ColorManager.bgr_to_cmyk_raw(src_hr_bgr)
+            # TAC（总墨量）审计：印前必须可核查，随 manifest 披露
+            self.last_tac = ColorManager.calculate_tac(comp_channels)
+        else:
+            self.last_tac = None
+            comp_channels = np.stack([
+                np.ascontiguousarray(src_hr_bgr[:, :, 2]),
+                np.ascontiguousarray(src_hr_bgr[:, :, 1]),
+                np.ascontiguousarray(src_hr_bgr[:, :, 0]),
+            ], axis=0)
 
         # 2. Build layers from UI Top to Bottom
         layers_to_build = []
@@ -70,20 +119,19 @@ class UniversalPSBBuilder:
 
             crop_m = m[y0:y1, x0:x1]
             
-            # Check if layer has a fixed color (e.g. fold seams antique tone)
+            # 统一成 BGR 裁剪块，再由 _apply_layer_channels 按目标色彩模式落通道
             if layer_info.get("fixed_color") is not None:
                 fc = layer_info["fixed_color"]
-                crop_b = np.full_like(crop_m, fc[0], dtype=np.uint8)
-                crop_g = np.full_like(crop_m, fc[1], dtype=np.uint8)
-                crop_r = np.full_like(crop_m, fc[2], dtype=np.uint8)
+                crop_bgr = np.empty((*crop_m.shape, 3), dtype=np.uint8)
+                crop_bgr[:, :, 0] = fc[0]
+                crop_bgr[:, :, 1] = fc[1]
+                crop_bgr[:, :, 2] = fc[2]
             else:
                 # Use inpainted content if available for deoccluded layers, otherwise source
                 color_src = layer_info.get("inpainted_hr_bgr")
                 if color_src is None:
                     color_src = src_hr_bgr
-                    
-                crop_src = color_src[y0:y1, x0:x1]
-                crop_b, crop_g, crop_r = cv2.split(crop_src)
+                crop_bgr = color_src[y0:y1, x0:x1]
 
             # Map blend mode
             bmode = enums.BlendMode.multiply if layer_info.get("blend_mode") == "MULTIPLY" else enums.BlendMode.normal
@@ -91,36 +139,30 @@ class UniversalPSBBuilder:
 
             ps_layer = nested_layers.Image(
                 name=name,
-                color_mode=enums.ColorMode.rgb,
+                color_mode=ps_color_mode,
                 blend_mode=bmode,
                 opacity=opacity,
                 top=y0, left=x0, bottom=y1, right=x1
             )
-            ps_layer.set_channel(enums.ColorChannel.red, crop_r)
-            ps_layer.set_channel(enums.ColorChannel.green, crop_g)
-            ps_layer.set_channel(enums.ColorChannel.blue, crop_b)
-            ps_layer.set_channel(enums.ColorChannel.transparency, crop_m)
+            self._apply_layer_channels(ps_layer, crop_bgr, crop_m)
             layers_to_build.append(ps_layer)
 
         # 3. Add base background layer at the very bottom (UI Bottom)
-        bg_b, bg_g, bg_r = cv2.split(bg_hr_bgr)
         bg_layer = nested_layers.Image(
             name=bg_layer_name or "02_纯净金箔大底板_Gold_Base_Clean",
-            color_mode=enums.ColorMode.rgb,
+            color_mode=ps_color_mode,
             blend_mode=enums.BlendMode.normal,
             opacity=255,
             top=0, left=0, bottom=self.target_h, right=self.target_w
         )
-        bg_layer.set_channel(enums.ColorChannel.red, bg_r)
-        bg_layer.set_channel(enums.ColorChannel.green, bg_g)
-        bg_layer.set_channel(enums.ColorChannel.blue, bg_b)
-        bg_layer.set_channel(enums.ColorChannel.transparency, np.full((self.target_h, self.target_w), 255, dtype=np.uint8))
+        bg_alpha = np.full((self.target_h, self.target_w), 255, dtype=np.uint8)
+        self._apply_layer_channels(bg_layer, bg_hr_bgr, bg_alpha)
         layers_to_build.append(bg_layer)
 
         # 4. Convert nested layers to PSD document
         psd_doc = nested_layers.nested_layers_to_psd(
             layers=layers_to_build,
-            color_mode=enums.ColorMode.rgb,
+            color_mode=ps_color_mode,
             version=enums.Version.version_2, # PSB Format
             compression=self.compression,
             size=(self.target_w, self.target_h)
@@ -150,7 +192,7 @@ class UniversalPSBBuilder:
         with open(output_path, "wb") as fd:
             psd_doc.write(fd)
 
-        del comp_r, comp_g, comp_b, comp_channels, bg_b, bg_g, bg_r
+        del comp_channels
         gc.collect()
 
         return output_path

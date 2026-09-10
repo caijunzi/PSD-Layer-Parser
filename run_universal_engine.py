@@ -295,7 +295,12 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     print(f"\n[第 6 步/共 6 步] 多图层 PSB 流式组装与 SIMD 极速编码 (DPI={target_dpi}, C-Accelerated RLE)...")
     # 底板图层名从 preset 读取，消除原先 `if preset_name == "japanese_screen_gold"` 的品类硬编码分支（G1）
     bg_name = preset.get("bg_layer_name", "01_纯净画布底板_Base_Ground")
-    builder = UniversalPSBBuilder(target_w=out_w, target_h=out_h, dpi=target_dpi, compression=enums.Compression.rle)
+    # PLATE 线产出真正的 CMYK 分色版；DESIGN 线产出 RGB 元素层
+    ps_color_mode = "cmyk" if is_plate else "rgb"
+    builder = UniversalPSBBuilder(
+        target_w=out_w, target_h=out_h, dpi=target_dpi,
+        compression=enums.Compression.rle, color_mode=ps_color_mode,
+    )
     builder.build_psb(output_path, src_hr, bg_hr, sorted_layers, hr_masks_dict, bg_layer_name=bg_name)
     t_step6 = time.time() - t0
 
@@ -318,7 +323,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         output_path=output_path,
         output_wh=(out_w, out_h),
         ppi=target_dpi,
-        color_mode="rgb",   # PLATE 的 CMYK 输出尚未接入（见尽调报告 P1-5），如实标注
+        color_mode=ps_color_mode,
     )
     man.generation_policy.declare(
         "super_resolution", sr_engine, sr_generative, 1.0,
@@ -377,6 +382,9 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     man.totals["deocclusion_engine"] = inpaint_engine
     man.totals["deocclusion_generative"] = bool(getattr(inpaint_provider, "is_generative", False))
     man.totals["deocclusion_pixel_count"] = total_recon_px
+    if getattr(builder, "last_tac", None):
+        man.totals["tac_max_pct"] = round(float(builder.last_tac[0]), 2)
+        man.totals["tac_mean_pct"] = round(float(builder.last_tac[1]), 2)
 
     # PLATE 纯净性校验结果写入 manifest，供下游质检与回灌环节读取
     ok_plate, plate_msg = man.assert_plate_purity()

@@ -147,20 +147,34 @@ class PsdCompiler:
         return enums.Version.version_1
 
     # ---------------- 图层构建 ----------------
+    # 通道标识必须用 ColorChannel 枚举，且只能经 `set_channel()` 传入。
+    # 实测两种错误写法（均抛异常，本编译器此前从未真跑过所以一直未暴露）：
+    #   1) set_channel(0, ...)  -> Color '0' is not valid for color mode '4'
+    #      （整数 0 被 ColorChannelMapping 解释为 ColorChannel.bitmap）
+    #   2) Image(channels={ColorChannel.cyan: ...})
+    #      -> <ColorChannel.cyan: 6> is not a valid ChannelId
+    #      （channels 字典的键要求 ChannelId，与 set_channel 的 ColorChannel 不是一回事）
+    CMYK_CHANNELS = (
+        enums.ColorChannel.cyan,
+        enums.ColorChannel.magenta,
+        enums.ColorChannel.yellow,
+        enums.ColorChannel.black,
+    )
+    RGB_CHANNELS = (
+        enums.ColorChannel.red,
+        enums.ColorChannel.green,
+        enums.ColorChannel.blue,
+    )
+
     @staticmethod
     def _build_image_layer(
         lyr: LayerDescriptor, mode: str, canvas_w: int, canvas_h: int
     ) -> nested_layers.Image:
         name = str(lyr.name).rstrip("\x00")[:255]
-
         top, bottom, left, right = PsdCompiler._place(lyr, canvas_w, canvas_h)
+        is_rgba = (mode == "DESIGN" or lyr.layer_type == "element_rgba")
 
-        if mode == "DESIGN" or lyr.layer_type == "element_rgba":
-            ch = PsdCompiler._rgba_channels(lyr, top, bottom, left, right)
-        else:
-            ch = PsdCompiler._cmyk_channels(lyr, top, bottom, left, right)
-
-        return nested_layers.Image(
+        ps_layer = nested_layers.Image(
             name=name,
             visible=bool(lyr.visible),
             opacity=int(lyr.opacity),
@@ -169,33 +183,43 @@ class PsdCompiler:
             left=left,
             bottom=bottom,
             right=right,
-            channels=ch,
+            color_mode=enums.ColorMode.rgb if is_rgba else enums.ColorMode.cmyk,
         )
+        if is_rgba:
+            PsdCompiler._apply_rgba(ps_layer, lyr, top, bottom, left, right)
+        else:
+            PsdCompiler._apply_cmyk(ps_layer, lyr, top, bottom, left, right)
+        return ps_layer
 
     @staticmethod
-    def _cmyk_channels(lyr: LayerDescriptor, top: int, bottom: int, left: int, right: int) -> dict:
+    def _apply_cmyk(ps_layer, lyr: LayerDescriptor,
+                    top: int, bottom: int, left: int, right: int) -> None:
+        """逐通道写入 CMYK 图层（逻辑墨量 → 磁盘反码，唯一转换点在 _to_disk）。"""
         if lyr.cmyk_channels is None:
             raise ValueError(f"PLATE 线图层缺少 cmyk_channels：{lyr.name}")
         h, w = bottom - top, right - left
-        ch: dict[int, np.ndarray] = {}
-        for i in range(4):
-            plane = lyr.cmyk_channels[i]
-            ch[i] = PsdCompiler._to_disk(PsdCompiler._crop(plane, h, w))
+        for i, cc in enumerate(PsdCompiler.CMYK_CHANNELS):
+            plane = PsdCompiler._to_disk(PsdCompiler._crop(lyr.cmyk_channels[i], h, w))
+            ps_layer.set_channel(cc, np.ascontiguousarray(plane))
         if lyr.alpha is not None:
-            ch[-1] = PsdCompiler._crop(lyr.alpha, h, w).astype(np.uint8)
-        return ch
+            ps_layer.set_channel(
+                enums.ColorChannel.transparency,
+                np.ascontiguousarray(PsdCompiler._crop(lyr.alpha, h, w).astype(np.uint8)),
+            )
 
     @staticmethod
-    def _rgba_channels(lyr: LayerDescriptor, top: int, bottom: int, left: int, right: int) -> dict:
+    def _apply_rgba(ps_layer, lyr: LayerDescriptor,
+                    top: int, bottom: int, left: int, right: int) -> None:
         h, w = bottom - top, right - left
         if lyr.rgba is None:
             # 无 RGBA 时退化为透明层，保证结构完整
             rgba = np.zeros((h, w, 4), dtype=np.uint8)
         else:
             rgba = PsdCompiler._fit_hwc(lyr.rgba, h, w)
-        ch = {0: rgba[:, :, 0], 1: rgba[:, :, 1], 2: rgba[:, :, 2]}
-        ch[-1] = rgba[:, :, 3] if rgba.shape[2] > 3 else np.full((h, w), 255, np.uint8)
-        return {k: np.ascontiguousarray(v) for k, v in ch.items()}
+        for i, cc in enumerate(PsdCompiler.RGB_CHANNELS):
+            ps_layer.set_channel(cc, np.ascontiguousarray(rgba[:, :, i]))
+        alpha = rgba[:, :, 3] if rgba.shape[2] > 3 else np.full((h, w), 255, np.uint8)
+        ps_layer.set_channel(enums.ColorChannel.transparency, np.ascontiguousarray(alpha))
 
     # ---------------- Section 5 合成 ----------------
     @staticmethod
