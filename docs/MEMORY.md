@@ -56,13 +56,13 @@
 | 循环单元 `master_cleaned_full767.png` | 388 × 767 px | 2026-09-09 |
 | 方案 A 裁切 | 388 × 718 px | 2026-09-09 |
 | 成品画布（制版线） | 5315 × 9449 px / 4 通道 CMYK / **8 bit** | 2026-09-09 |
-| **16K 终极母版 PSB（设计线）** | **$16000 \times 7808\text{ px}$ / 11 个独立图层 / 150.0 PPI** | **2026-09-10 实测（`Rosetsu_Master_16k.psb`）** |
-| 16K 母版物理体积 | **2.34 GB（2,517,517,320 字节 / 2400.9 MB）** | `pipeline/06_verify_psb.py` |
+| **16K 终极母版 PSB（设计线）** | **$16000 \times 7808\text{ px}$ / 11 个独立图层 / 150.0 PPI / RGB（mode=3）** | **2026-09-10 复测（`Rosetsu_Master_16k.psb`）** |
+| 16K 母版物理体积 | **1.847 GB（1,983,219,201 字节）** ⚠️ 旧值 2.34 GB / 1.08 GB 均不符 | 磁盘实读 + `psd_tools` 打开 |
 | 16K 母版对应印刷尺寸 | **$2709.3 \times 1322.2\text{ mm}$**（2.71米 × 1.32米） | Photoshop `0x03ED` 严格校验 |
-| 16K 母版合成保真度 | **MAE = 0.73**（远优于行业 ≤ 2.0 质检红线） | 像素级色差均方误差 |
+| 16K 母版合成保真度 | **MAE = 3.498** ⚠️ 旧值 0.73 不复现；**超出 ≤2.0 红线** | `pipeline/06_verify_psb.py`（阈值已于 2026-09-10 由 8.0 收紧为 2.0） |
 | **全流程端到端总耗时** | **168.00 秒（2.80 分钟）**（初版 1468.7s，提速 **8.74x** 🚀） | `docs/BENCHMARK_REPORT.md` |
 | Step 6 写盘耗时 | **27.66 秒**（纯 Python 原版 1141.65s，提速 **41.3x** 🚀） | C-SIMD PackBits 200 MB/s |
-| 图层 BBox | 11 层全部具备动态计算的最小外接包围盒，无全屏黑底 | 零硬编码自动追踪 |
+| 图层 BBox | ⚠️ 11 层中仅 5 层为紧凑 BBox，6 层覆盖全画幅 40%~76%（见 §3.0 事故） | 2026-09-10 复测推翻旧结论 |
 | psd-tools 版本 | 1.19.0，`psd.header` **不存在** | 2026-09-09 API 校准 |
 
 ### psd-tools 1.19 正确 API（校准表）
@@ -74,6 +74,40 @@
 | 分辨率 | `psd.image_resources.get_data(Resource.RESOLUTION_INFO).horizontal` | `horizontal_resolution` |
 | 图层名 | `layer.name.rstrip("\x00")` | `l.name`（带尾零） |
 | 图层像素 | `layer.numpy()` → `(H, W, C+1)` float32 | — |
+
+---
+
+## 3.0 重大事故：神经掩模无条件覆盖导致元素层泄漏（2026-09-10 定位并修复）
+
+**现象**：交付产物 `Rosetsu_Master_16k.psb` 中，印章层覆盖 **8.775%** 画幅，
+而 `masks_16k` 基线该层仅 **0.0145%**（BBox 310×259），**放大 605 倍，IoU 0.002**。
+芦雁 100×、题跋 42×、人物 29×；外框层反向退化为 0.014%（近乎空层）。
+
+**根因**（两条，均已修复）：
+
+1. **神经掩模无条件覆盖**：`GroundedSAMProvider.segment_objects` 中
+   `final_masks[k] = m` 直接用神经结果覆盖规则掩模。Grounding DINO 在**金地背景**
+   上对 prompt `"red stamp . cinnabar seal"` 产生假阳性大框，SAM 2 在该框内抠出大片
+   金地；规则引擎算出的正确印章掩模（0.0119%，BBox 68×63）被静默抹除。
+   诱因：`box_threshold=0.25` 过低、单框面积上限 30% 过松。
+2. **ROI 检测失效**：`|profile - median(profile)| > 5.0` 判据下，本图外框灰度 88、
+   画心金地 183，而行中位数 160 偏向画心，导致几乎所有行都"偏离中位数"，
+   ROI 被判为整幅画，`~roi_mask` 恒空 → 外框层退化。
+
+**修复**：
+
+- `grounded_sam_provider`：新增**神经掩模质量门**（面积预算 + 相对放大倍数 + IoU
+  三重校验），未通过者保留规则掩模并显式告警；`box_threshold` 0.25→0.35，
+  单框面积上限 30%→8%。
+- `segmentation_provider`：新增 `_detect_painting_roi`，以「边缘带 / 中心区双参考
+  + 连续 run 判定」替代中位数偏差法。
+
+**教训（写入工程纪律）**：
+
+- **任何 AI/神经输出在覆盖确定性算法结果前，必须通过质量门**。不可信的神经结果
+  必须回退，而不是无条件信任。
+- **质检断言必须用相对 golden baseline 判定**，绝对阈值（如 `len(psd) in [11,15]`、
+  面积 < 15%）发现不了「该小却大」的缺陷。
 
 ---
 
@@ -112,7 +146,7 @@
 
 - **主生产入口**：`run_universal_engine.py` 已完全打通，直接接受 `--preset`、`--scale`、`--dpi` 与 `--profile` 参数。
 - **质检与印前验证**：`pipeline/06_verify_psb.py` 与 `tests/audit_system_integrity.py` 构筑双重防线，全量自动化运行无阻塞。
-- **设计交付成品**：`outputs/Rosetsu_Master_16k.psb`（2.34 GB）已成功生成并通过全部物理与色彩断言。
+- **设计交付成品**：`outputs/Rosetsu_Master_16k.psb`（实测 **1.847 GB**）已生成；物理结构（16000×7808 / 150 PPI / 中文层名）通过，但**元素掩模质量与合成色差未达标**（见 §3.0）。
 
 ---
 

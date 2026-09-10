@@ -1,6 +1,22 @@
 # 工程开发日志（DAILY_LOG）
 
-> 倒序排列，记录每日演化。完整决策见 `MEMORY.md`，开发计划见 `UNIVERSAL_LAYER_ENGINE_DEVELOPMENT_PLAN.md`。
+> 记录每日演化。完整决策见 `MEMORY.md`，开发计划见 `UNIVERSAL_LAYER_ENGINE_DEVELOPMENT_PLAN.md`。
+> （注：原文自称"倒序排列"，实际为时序排列，此处以现状为准并修正描述。）
+
+> ### ⚠️ 2026-09-10 晚 · 数值更正声明（保留历史条目原文，仅在此声明正确值）
+>
+> 下方 2026-09-10 及之前条目中的以下数值经第三方复测**证伪**，引用时请以本声明为准：
+>
+> | 历史条目中的表述 | 复测实际值 | 依据 |
+> | :--- | :--- | :--- |
+> | 成品体积 2.34 GB / 1.08 GB | **1.847 GB**（1,983,219,201 字节） | 磁盘实读 + `psd_tools` |
+> | 图层数 15 层 | **11 层** | `psd_tools` |
+> | 合成保真度 MAE = 0.73 | **MAE = 3.498**（超出 ≤2.0 红线） | `pipeline/06_verify_psb.py` |
+> | "11 图层全部具备紧凑最小 BBox" | 仅 5 层紧凑，**6 层覆盖全画幅 40%~76%** | 对照 `masks_16k` 基线 |
+> | "Layer 0 直通加载 gold_base_clean_16k.jpg" | 该文件不存在，代码亦未传 `cached_bg_path` | 静态审查 |
+> | "五维审计 100% 满分通过" | 旧版断言无效；重写版对当前产物判 **FAIL** | `tests/audit_system_integrity.py` |
+>
+> 完整核查见 `docs/技术尽调与代码审查报告_20260910.md`。
 
 ---
 
@@ -138,4 +154,88 @@
   - **底板像素级零误差校验**：Layer 0 与 `gold_base_clean_16k.jpg` 逐像素对比，`Diff mean = [0, 0, 0]`，`Diff max = 0`，100% 字节级完全一致，图 1 瑕疵彻底清零；
   - **Section 5 合成色差校验**：`pipeline/06_verify_psb.py` 报告 MAE = 0.95（远低于 5.0 阈值），完美通过全部印前断言；
   - **五维系统完整性与防欺骗代码审计**：执行 `python tests/audit_system_integrity.py outputs/Rosetsu_Master_16k.psb`，硬件调度、零硬编码静态扫描、PSB物理交付物、真实代码（0 mock/0 fake sleep）、C-SIMD 200 MB/s 编解码五大维度 100% 满分通过。
+
+---
+
+## 2026-09-10（晚）第三方尽调复核 + P0 缺陷修复
+
+### 一、第三方视角全量尽调（实测推翻多项文档结论）
+
+产出 `docs/技术尽调与代码审查报告_20260910.md`。在真实环境（Python 3.12.10 / OpenCV 5.0 /
+psd-tools 1.19 / pytoshop 1.2.1 / OpenVINO 2026.3.1）**实际打开产物 PSB 复测**，推翻结论见上方更正声明。
+
+**完成度评估**：以"能跑出文件"衡量 ≈65%；以计划 §11 M6/M7 验收标准衡量 ≈35%；综合（含工程基建）**≈45%**。
+
+### 二、根治元素层掩模泄漏（P0，已修复）
+
+**定位过程**（三步递进，每步以实测排除假设）：
+
+1. 新建 `tests/diagnose_mask_quality.py`，以 `masks_16k` 为 golden baseline 逐层对比。
+   发现**规则引擎在 LR 下是正常的**（印章 0.0119%、IoU 0.700），泄漏不在分割阶段。
+2. 检验产物层 alpha 分布：呈**硬二值双峰**（>200 占 18.79%，中间灰度仅 0.19%），
+   且与源图亮度相关性 ≈0 → 排除引导滤波连续泄漏。
+3. 直接跑 `GroundedSAMProvider`，神经路径输出填充率与产物**精确吻合**
+   （印章 8.7745% vs 产物 8.775%）→ **锁定根因**。
+
+**根因（两条）**：
+
+1. `segment_objects` 中 `final_masks[k] = m` **无条件覆盖**规则掩模。Grounding DINO 在金地
+   背景上对 `"red stamp . cinnabar seal"` 产生假阳性大框（`box_threshold=0.25` 过低、
+   单框面积上限 30% 过松），SAM 2 抠出大片金地，抹掉正确的印章掩模。
+2. ROI 检测 `|profile - median(profile)| > 5.0` 失效：本图外框灰度 88、画心 183，
+   而行中位数 160 偏向画心，导致 ROI 被判为整幅画，`~roi_mask` 恒空 → 外框层退化。
+
+**修复**：
+
+- `grounded_sam_provider`：新增**神经掩模质量门**（面积预算 + 相对放大倍数 + IoU 三重校验），
+  未通过者保留规则掩模并显式告警；`box_threshold` 0.25→0.35，单框面积上限 30%→8%。
+- `segmentation_provider`：新增 `_detect_painting_roi`，以「边缘带/中心区双参考 + 连续 run 判定」
+  替代中位数偏差法。
+
+**修复效果**（诊断实测）：
+
+| 图层 | 修复前 | 修复后 | 基线 | IoU |
+| :--- | ---: | ---: | ---: | ---: |
+| 09A 印章 | 8.7745% | **0.0119%**（BBox 68×63） | 0.0145% | **0.700** |
+| 08 芦雁 | 6.6332% | **0.1744%** | 0.0651% | 0.124 |
+| 09B 题跋 | 2.7458% | **0.2475%** | 0.0652% | 0.257 |
+| 07 人物 | 6.6537% | **0.2683%** | 0.2346% | 0.312 |
+| 10A 外框 | 0.0762%（空层） | **24.9432%** | 11.1555% | 0.119 |
+| 10B 折痕 | 0.6247%（IoU 0.079） | 0.5166% | 0.4758% | **0.706** |
+
+结构性缺陷 **6 层 → 0 层**。
+
+### 三、审计与质检体系重写（P0，使其真正能发现问题）
+
+- `tests/audit_system_integrity.py` 重写为可回归版：D1 硬件改能力探测（不再硬绑本机）、
+  D2 改 **AST 级扫描**（旧版只扫 8 条历史黑名单，永远发现不了新魔法值；实测披露 147+ 处）、
+  D3 新增**逐层掩模质量相对 golden baseline 判定**（IoU<0.10 且面积失衡>10× 为结构性缺陷；
+  并修正 cover 计算——旧式分母用层自身 size 导致恒为 100%）、D5 新增与纯 Python PackBits 的
+  **开关对比**（实测 358 MB/s vs 4.9 MB/s）。
+  实测对当前（修复前）产物判 **FAIL**，精确命中 5 个缺陷层且不误报。
+- `pipeline/06_verify_psb.py` **去裸 assert**（违反计划 §8.3，`python -O` 下会假绿），
+  改用 `QAReport.record()` + 退出码 + JSON 报告；修正默认路径；MAE 阈值由 8.0 收紧为 2.0。
+  实测当前产物 MAE=3.498 → 诚实 FAIL。
+
+### 四、工程基建
+
+- **建立 git 基线**（此前工作区无任何版本控制，4.8 GB 产物无回滚点）：
+  `eb46867` 基线快照 → `3281893` 掩模修复 → `7330e5f` 审计重写 → `c736b21` 质检改造。
+  `.gitignore` 补充排除 `third_party/`（140 MB vendored 源码）与 `scratch/`。
+- **修正依赖清单**：`requirements.txt` 原声明了未安装的 `pydantic`，却遗漏实际必需的
+  `imagecodecs`（C-SIMD 200 MB/s 核心）、`openvino`（异构调度）、`scikit-image`（Frangi 骨架流，
+  缺失会静默降级）。裸环境装完无法复现宣称性能。
+- **文档数值统一**：15 处矛盾数值统一为复测值（README / GEMINI / MEMORY / plan / ARCHITECTURE /
+  BENCHMARK_REPORT），历史日志以更正声明方式保留原文。
+
+### 五、遗留待办（未在本轮处理）
+
+- ⬜ 重跑生产流水线并复核新产物（修复已并入代码，但现有 PSB 仍是修复前生成）
+- ⬜ 打通 PLATE 制版线：`micro_holes` / `metallic_foil` / `contour_protection` /
+  `seam_harmonizer` / `trapping` 五算子已实现但均未接入生产，产物实测为 RGB
+- ⬜ 消除双编译器：`engine/core/PsdCompiler` 与 `engine/psb_builder.py` 职责重复，后者被生产使用但能力更弱
+- ⬜ Preset 成为真 SSOT：`layer_hierarchy` 为死配置（零引用），同类语义硬编码在代码中（G2 不成立）
+- ⬜ 修复写盘内存隐患：`fast_compress_rle` 累积单个 `bytearray` 后一次性写入，16 GB 机器有 OOM 风险
+- ⬜ 合成色差 MAE 3.498 → 需降至 ≤2.0
+- ⬜ ICC / TAC（ADR-007）与色彩双分支（R2）未实现
 
