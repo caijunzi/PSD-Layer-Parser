@@ -25,27 +25,78 @@ class ZeroHardcodeSegmentationProvider(BaseSegmentationProvider):
         self.min_contrast_offset = float(min_contrast_offset)
         self.last_stats = {}
 
+    @staticmethod
+    def _detect_painting_roi(
+        gray: np.ndarray,
+        edge_band: int = 12,
+        min_contrast: float = 10.0,
+        min_run: int = 8,
+    ) -> np.ndarray:
+        """检测画心有效区域（排除外框绫边与摄影翻拍背景）。
+
+        旧实现用 `|profile - median(profile)| > 5.0` 判定，当画面内容分布不均匀时
+        （本图外框灰度 88、画心金地 183，而 row 中位数 160 偏向画心），几乎所有行列
+        都会"偏离中位数"，导致 ROI 被判为整幅画，`~roi_mask` 恒为空 —— 外框层因此
+        退化为空层（填充率 0.076%，而基线为 11.15%）。
+
+        新实现：取四周边缘带的灰度作为外框参考、中心区灰度作为画心参考，逐行/逐列
+        归类到距离更近的一侧，并要求连续 min_run 行/列才确认进入画心，抗单点噪声。
+        若边缘与中心对比不足（无外框），返回全图。
+        """
+        h, w = gray.shape
+        row_m = gray.mean(axis=1)
+        col_m = gray.mean(axis=0)
+
+        eb = max(2, min(edge_band, h // 8, w // 8))
+        edge_ref = float(np.median(
+            np.concatenate([row_m[:eb], row_m[-eb:], col_m[:eb], col_m[-eb:]])
+        ))
+        inner_ref = float(np.median(gray[h // 4: 3 * h // 4, w // 4: 3 * w // 4]))
+
+        if abs(inner_ref - edge_ref) < min_contrast:
+            return np.ones((h, w), dtype=bool)  # 无可辨识外框，整幅即画心
+
+        def _boundary(profile: np.ndarray, length: int) -> tuple[int, int]:
+            # 前向：第一个连续 min_run 个位置归为"画心"的起点
+            start, run = 0, 0
+            for i, v in enumerate(profile):
+                if abs(v - inner_ref) < abs(v - edge_ref):
+                    run += 1
+                    if run >= min_run:
+                        start = i - run + 1
+                        break
+                else:
+                    run = 0
+            # 后向：对称处理
+            end, run = length, 0
+            for i in range(length - 1, -1, -1):
+                if abs(profile[i] - inner_ref) < abs(profile[i] - edge_ref):
+                    run += 1
+                    if run >= min_run:
+                        end = i + run
+                        break
+                else:
+                    run = 0
+            return start, end
+
+        t, b = _boundary(row_m, h)
+        l, r = _boundary(col_m, w)
+
+        # 退化保护：若检测结果几乎等于全图，视为未检出外框
+        if (b - t) > 0.98 * h and (r - l) > 0.98 * w:
+            return np.ones((h, w), dtype=bool)
+
+        roi = np.zeros((h, w), dtype=bool)
+        roi[max(0, t):min(h, b), max(0, l):min(w, r)] = True
+        return roi
+
     def segment_by_labels(self, img_bgr: np.ndarray, labels: Optional[List[str]] = None, roi_mask: Optional[np.ndarray] = None) -> Dict[str, np.ndarray]:
         h, w, _ = img_bgr.shape
         gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         
         # 1. Automatic Painting Canvas ROI Detection (No hardcoded bounds)
         if roi_mask is None:
-            # Detect outer studio mounting border by horizontal/vertical margin color consistency
-            row_m = gray.mean(axis=1)
-            col_m = gray.mean(axis=0)
-            is_inner_y = np.abs(row_m - np.median(row_m)) > 5.0
-            is_inner_x = np.abs(col_m - np.median(col_m)) > 5.0
-            y_idx = np.where(is_inner_y)[0]
-            x_idx = np.where(is_inner_x)[0]
-            
-            roi_mask = np.zeros((h, w), dtype=bool)
-            if len(y_idx) > 20 and len(x_idx) > 20:
-                t, b = int(y_idx[0]), int(y_idx[-1])
-                l, r = int(x_idx[0]), int(x_idx[-1])
-                roi_mask[t:b, l:r] = True
-            else:
-                roi_mask[:] = True
+            roi_mask = self._detect_painting_roi(gray)
 
         # 2. Dynamic Ink/Pigment Thresholding based on Otsu & Background Statistics
         bg_val = np.median(gray[roi_mask])
