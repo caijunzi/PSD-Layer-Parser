@@ -37,7 +37,7 @@ def load_preset(preset_arg):
     with open(default_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design"):
+def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None):
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
     from engine.schemas.manifest import (
@@ -297,9 +297,28 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     bg_name = preset.get("bg_layer_name", "01_纯净画布底板_Base_Ground")
     # PLATE 线产出真正的 CMYK 分色版；DESIGN 线产出 RGB 元素层
     ps_color_mode = "cmyk" if is_plate else "rgb"
+
+    # 印前合规：ICC 驱动分色（含黑版生成）+ TAC 工艺压制（ADR-007）
+    icc_path = icc_override or preset.get("icc_path")
+    tac_policy = None
+    icc_info = None
+    if is_plate:
+        from engine.core.ink_limiter import icc_summary, resolve_policy
+        icc_info = icc_summary(icc_path)
+        tac_policy = resolve_policy(
+            condition=preset.get("print_condition"),
+            limit_pct=preset.get("tac_limit_pct"),
+            max_k_pct=preset.get("max_k_pct"),
+            icc_path=icc_path,
+        )
+        print(f"  -> [Prepress] ICC: {icc_info.get('description') or '未提供（朴素 RGB→CMYK 转换，无色彩管理）'}")
+        print(f"  -> [Prepress] TAC 上限 {tac_policy.limit_pct:.0f}% / MaxK {tac_policy.max_k_pct:.0f}%"
+              f"  来源: {tac_policy.source}")
+
     builder = UniversalPSBBuilder(
         target_w=out_w, target_h=out_h, dpi=target_dpi,
         compression=enums.Compression.rle, color_mode=ps_color_mode,
+        icc_path=icc_path, tac_policy=tac_policy,
     )
     builder.build_psb(output_path, src_hr, bg_hr, sorted_layers, hr_masks_dict, bg_layer_name=bg_name)
     t_step6 = time.time() - t0
@@ -385,6 +404,11 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     if getattr(builder, "last_tac", None):
         man.totals["tac_max_pct"] = round(float(builder.last_tac[0]), 2)
         man.totals["tac_mean_pct"] = round(float(builder.last_tac[1]), 2)
+    ink_stats = getattr(builder, "last_ink_stats", None)
+    if ink_stats:
+        man.totals["ink_compliance"] = ink_stats
+    if icc_info is not None:
+        man.totals["color_management"] = icc_info
 
     # PLATE 纯净性校验结果写入 manifest，供下游质检与回灌环节读取
     ok_plate, plate_msg = man.assert_plate_purity()
@@ -444,6 +468,13 @@ if __name__ == "__main__":
         help="Low-level hardware override (optional, defaults to profile configuration)"
     )
     parser.add_argument(
+        "--icc",
+        default=None,
+        help="目标印刷条件的 ICC profile 路径（覆盖 preset.icc_path）。"
+             "用于 CMYK 分色与黑版生成；缺失时回退朴素转换并如实标注。"
+             "注意：TAC 上限来自印刷工艺参数，不在 ICC 中",
+    )
+    parser.add_argument(
         "--mode",
         choices=["plate", "design", "both"],
         default=None,
@@ -484,4 +515,5 @@ if __name__ == "__main__":
             device=args.device,
             profile=args.profile,
             output_mode=job_mode.value,
+            icc_override=args.icc,
         )

@@ -1,28 +1,75 @@
+import os
 import numpy as np
 import cv2
 from PIL import Image
-from typing import Tuple
+from typing import Optional, Tuple
 
 class ColorManager:
     """Handles professional color conversions, CMYK mapping, TAC control, and pytoshop raw inversion."""
 
     @staticmethod
-    def bgr_to_cmyk_raw(bgr_image: np.ndarray) -> np.ndarray:
-        """
-        Converts BGR image directly to pytoshop raw CMYK channels (4, H, W) with zero synthetic formula.
-        In pytoshop raw CMYK: 255 = 0% ink (blank paper), 0 = 100% ink.
+    def bgr_to_cmyk_raw(bgr_image: np.ndarray, icc_path: Optional[str] = None) -> np.ndarray:
+        """BGR → pytoshop 磁盘反码 CMYK (4, H, W)。
+
+        约定：pytoshop raw CMYK 中 255 = 0% 墨（空白纸），0 = 100% 墨。
+
+        色彩转换路径（2026-09-10 增补）：
+          - 提供 `icc_path` 且文件存在时，走 **ICC 驱动的转换**（ImageCms，相对比色意图），
+            这是印前应有做法：色彩由目标印刷条件决定，而非设备无关的朴素公式；
+          - 否则回退 PIL 的朴素 `convert('CMYK')`，并在调用方 manifest 中如实标注
+            "无色彩管理"（该回退仅用于开发/验证，不应用于正式交付）。
+
+        注意：ICC profile **不含 TAC 上限**，TAC 属印刷工艺参数，
+        见 `engine/core/ink_limiter.py` 的说明。
         """
         rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb)
-        cmyk_pil = pil_img.convert('CMYK')
-        cmyk_np = np.array(cmyk_pil)  # shape (H, W, 4), 0..255 where 255 is 100% ink
 
-        raw_c = 255 - cmyk_np[:, :, 0]
-        raw_m = 255 - cmyk_np[:, :, 1]
-        raw_y = 255 - cmyk_np[:, :, 2]
-        raw_k = 255 - cmyk_np[:, :, 3]
+        if icc_path and os.path.isfile(icc_path):
+            cmyk_np = ColorManager._rgb_to_cmyk_icc(rgb, icc_path)
+        else:
+            cmyk_np = np.array(Image.fromarray(rgb).convert('CMYK'))  # (H,W,4) 0..255 墨量
 
-        return np.stack([raw_c, raw_m, raw_y, raw_k], axis=0)
+        # 墨量 → 磁盘反码
+        return (255 - cmyk_np).transpose(2, 0, 1).astype(np.uint8)
+
+    # ICC transform 缓存：buildTransform 是重操作，而生产链路会对
+    # Section 5 + 背景层 + 每个图层分别做 CMYK 转换（实测 13 次）。
+    # 若不缓存，Step 6 写盘耗时从 66.9s 暴增到 217.5s。
+    _TRANSFORM_CACHE: dict = {}
+
+    @staticmethod
+    def _get_icc_transform(icc_path: str):
+        """获取（并缓存）sRGB → 目标 CMYK 的 ImageCms transform。"""
+        from PIL import ImageCms
+
+        key = os.path.abspath(icc_path)
+        xform = ColorManager._TRANSFORM_CACHE.get(key)
+        if xform is None:
+            dst = ImageCms.getOpenProfile(key)
+            src = ImageCms.createProfile("sRGB")
+            xform = ImageCms.buildTransform(
+                src, dst, "RGB", "CMYK",
+                renderingIntent=ImageCms.Intent.RELATIVE_COLORIMETRIC,
+            )
+            ColorManager._TRANSFORM_CACHE[key] = xform
+        return xform
+
+    @staticmethod
+    def clear_icc_cache() -> None:
+        """清空 transform 缓存（切换 ICC / 测试时用）。"""
+        ColorManager._TRANSFORM_CACHE.clear()
+
+    @staticmethod
+    def _rgb_to_cmyk_icc(rgb: np.ndarray, icc_path: str) -> np.ndarray:
+        """用 ICC profile 做 sRGB → 目标 CMYK 的转换，返回 (H, W, 4) 墨量 0..255。"""
+        from PIL import ImageCms
+
+        xform = ColorManager._get_icc_transform(icc_path)
+        out = ImageCms.applyTransform(Image.fromarray(rgb), xform)
+        arr = np.array(out)
+        if arr.ndim != 3 or arr.shape[2] != 4:
+            raise ValueError(f"ICC 转换未返回 4 通道 CMYK：{arr.shape}")
+        return arr.astype(np.uint8)
 
     @staticmethod
     def get_ivory_substrate_cmyk_raw(height: int, width: int,

@@ -6,6 +6,8 @@
     },
     "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
     "plate_inpaint_method": "telea_ns",
+    "icc_path": "profiles/Coated_FOGRA39L.icc",
+    "print_condition": "eci_coated_practice",
     "background_mode": "paper_or_gold_screen",
     "panel_count": 6,
     "dpi": 150.0,
