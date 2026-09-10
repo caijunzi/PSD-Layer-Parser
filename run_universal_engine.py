@@ -9,6 +9,7 @@ import sys
 import json
 import time
 import argparse
+from typing import Any
 import cv2
 import numpy as np
 
@@ -36,6 +37,105 @@ def load_preset(preset_arg):
     default_path = os.path.join("presets", "traditional_chinese_ink.json")
     with open(default_path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
+    """PLATE 线印前算子链：轮廓保全 / 微孔刀模 / 专色陷印。
+
+    对应 ADR-008（裁切线运行时化）/ ADR-017（陷印）/ 铁律 R4、R5。
+    三个算子均为**品类可选**：由 preset 的 plate_operators 开关控制，
+    未启用的算子如实记录 skipped，不伪造结果。
+
+    返回 (operators_summary, extra_layers)：
+      operators_summary: 写入 manifest 的逐算子结果
+      extra_layers: 需并入分层流程的新图层（刀模层 / 专色层）
+    """
+    from engine.operators.base import OperatorResult
+    from engine.operators.contour_protection import ContourProtectionOperator
+    from engine.operators.micro_holes import MicroHolesOperator
+    from engine.operators.trapping import TrappingOperator
+
+    cfg = preset.get("plate_operators", {}) or {}
+    summary: dict[str, Any] = {}
+    extra_layers: list[dict] = []
+
+    # 1) 轮廓保全：运行时计算安全裁切下限（ADR-008，替代历史硬编码 Y=718）
+    c_cfg = cfg.get("contour_protection", {})
+    if c_cfg.get("enabled", True):
+        res = ContourProtectionOperator().run(src_lr, params=c_cfg.get("params"))
+        if res.success:
+            summary["contour_protection"] = {
+                "status": "ok",
+                "safe_bottom_y_src": int(res.data.get("safe_bottom_y", -1)),
+                **{k: v for k, v in res.metrics.items()},
+            }
+        else:
+            summary["contour_protection"] = {"status": "skipped", "reason": res.message}
+    else:
+        summary["contour_protection"] = {"status": "disabled"}
+
+    # 2) 微孔刀模（铁律 R5：仅在有效基材掩模内检测）
+    m_cfg = cfg.get("micro_holes", {})
+    if m_cfg.get("enabled", False):
+        res = MicroHolesOperator().run(src_lr, params={
+            **(m_cfg.get("params") or {}),
+            "target_size": (src_lr.shape[1], src_lr.shape[0]),
+        })
+        if res.success:
+            diecut = res.data.get("diecut_mask") or res.data.get("mask")
+            n_holes = int(res.metrics.get("hole_count", 0) or 0)
+            if diecut is not None and n_holes > 0:
+                extra_layers.append({
+                    "name": m_cfg.get("layer_name", "12_DieCut_Mask"),
+                    "mask": diecut,
+                    "blend_mode": "NORMAL",
+                    "opacity": 255,
+                    "z_index": 105.0,
+                })
+                summary["micro_holes"] = {"status": "ok", "layer_added": True,
+                                          **{k: v for k, v in res.metrics.items()}}
+            else:
+                summary["micro_holes"] = {"status": "ok", "layer_added": False,
+                                          "reason": "未检出微孔", **res.metrics}
+        else:
+            summary["micro_holes"] = {"status": "skipped", "reason": res.message}
+    else:
+        summary["micro_holes"] = {"status": "disabled"}
+
+    # 3) 专色陷印（ADR-017）：需显式指定专色图层来源，避免金底板被误判为专色
+    t_cfg = cfg.get("trapping", {})
+    spot_layer_name = t_cfg.get("spot_layer_name")
+    if t_cfg.get("enabled", False) and spot_layer_name:
+        spot = next((l["mask"] for l in sorted_layers
+                     if l["name"] == spot_layer_name and l.get("mask") is not None), None)
+        if spot is not None:
+            res = TrappingOperator().run(None, params={
+                "spot_mask": spot,
+                "ppi": ppi,
+                **(t_cfg.get("params") or {}),
+            })
+            if res.success:
+                extra_layers.append({
+                    "name": t_cfg.get("layer_name", "11_FoilTrap_Spot"),
+                    "mask": res.data["spot_channel"],
+                    "blend_mode": "NORMAL",
+                    "opacity": 255,
+                    "z_index": 104.0,
+                })
+                summary["trapping"] = {"status": "ok", "layer_added": True,
+                                       **{k: v for k, v in res.metrics.items()}}
+            else:
+                summary["trapping"] = {"status": "skipped", "reason": res.message}
+        else:
+            summary["trapping"] = {"status": "skipped",
+                                   "reason": f"配置的专色图层不存在: {spot_layer_name}"}
+    else:
+        summary["trapping"] = {
+            "status": "disabled" if not t_cfg.get("enabled", False) else "skipped",
+            **({"reason": "未配置 spot_layer_name"} if t_cfg.get("enabled", False) else {}),
+        }
+
+    return summary, extra_layers
+
 
 def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None):
     t_start = time.time()
@@ -185,6 +285,24 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     for idx, lyr in enumerate(sorted_layers):
         print(f"     [{idx:02d}] {lyr['name']:<38} (混合: {lyr['blend_mode']:<8} 不透明度: {lyr['opacity']:<3} 深度Z: {lyr['z_index']:.1f})")
     t_step3 = time.time() - t0
+
+    # -------------------------------------------------------------
+    # Step 3.5: PLATE 线印前算子链（轮廓保全 / 微孔刀模 / 专色陷印）
+    #   品类可选：由 preset.plate_operators 配置启停（ADR-008 / ADR-017）
+    # -------------------------------------------------------------
+    plate_ops_summary: dict = {}
+    if is_plate:
+        t_ops = time.time()
+        print("\n[第 3.5 步] PLATE 印前算子链 (轮廓保全 / 微孔刀模 / 专色陷印)...")
+        plate_ops_summary, extra_layers = _run_plate_operators(
+            src_lr, sorted_layers, preset, target_dpi)
+        for lyr in extra_layers:
+            sorted_layers.append(lyr)
+            print(f"     + 新增图层: {lyr['name']}")
+        for op_name, info in plate_ops_summary.items():
+            print(f"     - {op_name}: {info.get('status')}"
+                  + (f" ({info['reason']})" if info.get("reason") else ""))
+        plate_ops_time = time.time() - t_ops
 
     # -------------------------------------------------------------
     # Step 4: Universal 2.5D De-occlusion Completion & Reconstruction Marking
@@ -414,6 +532,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     ok_plate, plate_msg = man.assert_plate_purity()
     man.totals["plate_purity_ok"] = bool(ok_plate)
     man.totals["plate_purity_message"] = plate_msg
+    if plate_ops_summary:
+        man.totals["plate_operators"] = plate_ops_summary
     man.save(manifest_path, mask_dir=None)
 
     if is_plate and not ok_plate:

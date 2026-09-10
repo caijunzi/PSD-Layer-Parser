@@ -8,6 +8,11 @@
     "plate_inpaint_method": "telea_ns",
     "icc_path": "profiles/Coated_FOGRA39L.icc",
     "print_condition": "eci_coated_practice",
+    "plate_operators": {
+        "contour_protection": { "enabled": true },
+        "micro_holes": { "enabled": false },
+        "trapping": { "enabled": false }
+    },
     "background_mode": "paper_or_gold_screen",
     "panel_count": 6,
     "dpi": 150.0,
