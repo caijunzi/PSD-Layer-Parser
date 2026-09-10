@@ -27,8 +27,17 @@ class BaseSegmentationProvider(ABC):
         pass
 
 class BaseInpaintingProvider(ABC):
-    """Abstract interface for occluded background reconstruction & inpainting."""
-    
+    """Abstract interface for occluded background reconstruction & inpainting.
+
+    `is_generative` 是**产品线准入的关键标记**（§3.1 硬边界 1）：
+    凡是基于生成式 / 扩散模型的实现（如 LaMa）**必须**覆写为 True，
+    否则会被 PLATE 制版线误判为可用的确定性补全。
+    默认 False 表示"确定性算法"（Telea / Navier-Stokes 等经典插值）。
+    """
+
+    #: 是否为生成式模型输出（PLATE 线禁用）
+    is_generative: bool = False
+
     @abstractmethod
     def inpaint(self, img_bgr: np.ndarray, mask_u8: np.ndarray) -> np.ndarray:
         """

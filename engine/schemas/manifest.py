@@ -74,6 +74,9 @@ class LayerGenerationRecord:
     name: str
     generated: bool = False
     generation_reasons: list[str] = field(default_factory=list)
+    #: 确定性填充（Telea / Navier-Stokes 等经典算法）—— 不算生成内容，
+    #: 但同样需要留追溯掩码，故与 generation_reasons 分开记录。
+    fill_reasons: list[str] = field(default_factory=list)
     bbox: Optional[tuple[int, int, int, int]] = None     # (left, top, right, bottom)
     recon_mask_path: Optional[str] = None                # 相对 manifest 的路径
     # 掩码坐标系与尺寸：按 §3.1"坐标必须带坐标系前缀"的精神显式标注。
@@ -85,9 +88,19 @@ class LayerGenerationRecord:
     recon_ratio: float = 0.0                             # 相对该掩码所在空间面积
 
     def add_reason(self, reason: str) -> None:
+        """记录**生成式**介入（生成模型输出），计入生成内容。"""
         if reason not in self.generation_reasons:
             self.generation_reasons.append(reason)
         self.generated = True
+
+    def add_deterministic_fill(self, reason: str) -> None:
+        """记录**确定性填充**（经典插值算法）。
+
+        不计入生成内容，因此不会让 PLATE 产物判为不纯净；
+        但仍保留掩码路径，供回溯与人工复核。
+        """
+        if reason not in self.fill_reasons:
+            self.fill_reasons.append(reason)
 
 
 @dataclass(eq=False)
@@ -143,8 +156,8 @@ class DeliverableManifest:
                 return r
         return None
 
-    def generated_ratio(self) -> float:
-        """生成内容占比（按像素加权，取各层 recon_ratio×层面积 之和 / 全幅面积）。"""
+    def _area_weighted_ratio(self, pred) -> float:
+        """按层面积加权的占比（各层 recon_ratio × 层面积 之和 ÷ 全幅面积）。"""
         if not self.output:
             return 0.0
         canvas_px = int(self.output.get("width", 0)) * int(self.output.get("height", 0))
@@ -152,12 +165,21 @@ class DeliverableManifest:
             return 0.0
         acc = 0.0
         for r in self.layers:
-            if not r.generated or not r.bbox:
+            if not pred(r) or not r.bbox:
                 continue
             l, t, rr, b = r.bbox
-            layer_area = max(0, rr - l) * max(0, b - t)
-            acc += r.recon_ratio * layer_area
+            acc += r.recon_ratio * max(0, rr - l) * max(0, b - t)
         return min(1.0, acc / canvas_px)
+
+    def generated_ratio(self) -> float:
+        """生成内容占比（生成式模型输出）。"""
+        return self._area_weighted_ratio(lambda r: r.generated)
+
+    def deterministic_fill_ratio(self) -> float:
+        """确定性填充占比（Telea/NS 等，不算生成内容，供审计参考）。"""
+        return self._area_weighted_ratio(
+            lambda r: bool(r.fill_reasons) and not r.generated
+        )
 
     def assert_plate_purity(self) -> tuple[bool, str]:
         """校验 PLATE 线纯净性：不得含任何生成内容（§3.1 硬边界 1）。"""

@@ -53,7 +53,9 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     mode = OutputMode.parse(output_mode)
     if mode == OutputMode.BOTH:
         raise ValueError("run_pipeline 只处理单一产品线；both 模式请在 main 中分别调用 plate 与 design")
-    use_generative_sr = GENERATIVE_UPSCALE_ALLOWED[mode]
+    # 该产品线是否允许生成内容 —— 同时控制「超分」与「遮挡补全」两条路径
+    # （PLATE 线两条都必须走确定性算法，见 §3.1 硬边界 1）
+    allow_generative = GENERATIVE_UPSCALE_ALLOWED[mode]
     is_plate = (mode == OutputMode.PLATE)
 
     print("=" * 65)
@@ -108,22 +110,47 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # -------------------------------------------------------------
     t0 = time.time()
     print("\n[第 2 步/共 6 步] 纯净画布底板提取与去墨重构 (Canvas Support Extraction)...")
-    lama_provider = None
-    try:
-        from engine.providers.inpainting_provider import LaMaInpaintingProvider
-        from engine.schemas.device_config import DEVICE_HARDWARE_MAP, DeviceOption
+    # 补全策略同样按产品线隔离（§3.1 硬边界 1）：
+    #   PLATE 线 —— LaMa 也算生成式模型输出，必须换确定性算法，
+    #              否则 plate_purity 校验会判不合格（本项由 manifest 自动校验）
+    inpaint_provider = None
+    if allow_generative:
+        try:
+            from engine.providers.inpainting_provider import LaMaInpaintingProvider
+            from engine.schemas.device_config import DEVICE_HARDWARE_MAP, DeviceOption
 
-        target_hw = DEVICE_HARDWARE_MAP.get(chosen_hw.lower(), chosen_hw)
-        lama = LaMaInpaintingProvider(preferred_device=target_hw, profile_name=profile)
-        if lama.backend is not None:
-            lama_provider = lama
-            print(f"  -> [Neural Inpainting] LaMa FFC 频域补全已激活 [{lama.backend}].")
-    except Exception as e:
-        print(f"  -> [Neural Inpainting] Provider fallback: {e}")
+            target_hw = DEVICE_HARDWARE_MAP.get(chosen_hw.lower(), chosen_hw)
+            lama = LaMaInpaintingProvider(preferred_device=target_hw, profile_name=profile)
+            if lama.backend is not None:
+                inpaint_provider = lama
+                print(f"  -> [Neural Inpainting] LaMa FFC 频域补全已激活 [{lama.backend}].")
+        except Exception as e:
+            print(f"  -> [Neural Inpainting] Provider fallback: {e}")
+    else:
+        from engine.providers.inpainting_provider import TeleaInpaintingProvider
+
+        inpaint_provider = TeleaInpaintingProvider(
+            method=preset.get("plate_inpaint_method", "telea_ns"),
+            radius=preset.get("deocclusion_radius", 7),
+        )
+        print(f"  -> [Deterministic Inpainting] PLATE 线使用 {inpaint_provider.method} "
+              f"确定性补全（无生成模型输出，结果可复算）")
+
+    # 供 manifest 记录的实际补全引擎名（形如 LaMaInpaintingProvider:openvino_GPU.1）
+    if inpaint_provider is None:
+        inpaint_engine = "none"
+    else:
+        _bk = getattr(inpaint_provider, "backend", None)
+        _mth = getattr(inpaint_provider, "method", None)
+        inpaint_engine = type(inpaint_provider).__name__
+        if _mth:
+            inpaint_engine += f"[{_mth}]"
+        if _bk:
+            inpaint_engine += f":{_bk}"
 
     bg_extractor = UniversalBackgroundExtractor(
         mode=preset.get("background_mode", "paper_or_gold_screen"),
-        inpainting_provider=lama_provider
+        inpainting_provider=inpaint_provider
     )
     
     total_fg = np.zeros((h_lr, w_lr), dtype=np.uint8)
@@ -174,7 +201,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         params={
             "image": src_lr,
             "layers": sorted_layers,
-            "inpainting_provider": lama_provider,
+            "inpainting_provider": inpaint_provider,
             "extension_pixels": preset.get("deocclusion_extension_px", 20),
             "inpaint_radius": preset.get("deocclusion_radius", 7),
             "max_area_ratio": preset.get("max_reconstruction_ratio", 0.08),
@@ -201,7 +228,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     #            故只走阶梯式 Lanczos + 引导滤波（确定性插值，不生成新结构）；
     #   DESIGN 线：允许生成式超分，但 manifest 必须披露并输出生成区掩模。
     # -------------------------------------------------------------
-    if use_generative_sr:
+    if allow_generative:
         from engine.providers.realesrgan_provider import RealESRGANProvider
         esrgan = RealESRGANProvider(
             preferred_device=chosen_hw,
@@ -300,8 +327,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     if deoc_res.success:
         man.generation_policy.declare(
             "deocclusion",
-            ("lama:" + str(lama_provider.backend)) if lama_provider is not None else "cv2.telea",
-            lama_provider is not None,
+            inpaint_engine,
+            bool(getattr(inpaint_provider, "is_generative", False)),
             deoc_res.metrics.get("reconstruction_area_ratio", 0.0),
             "2.5D 遮挡定向补全",
         )
@@ -325,7 +352,12 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 rx, ry, rw, rh = rec.bbox
                 rec.bbox = (rx, ry, rx + rw, ry + rh)                   # -> (l, t, r, b)
         if rmask is not None and np.count_nonzero(rmask) > 0:
-            rec.add_reason("deocclusion")
+            # 生成式补全（LaMa）计为生成内容；确定性补全（Telea/NS）仅留追溯记录，
+            # 这样 PLATE 产物既保住了补全可用性，又不会判为含生成内容。
+            if getattr(inpaint_provider, "is_generative", False):
+                rec.add_reason(f"deocclusion({inpaint_engine})")
+            else:
+                rec.add_deterministic_fill(f"deocclusion({inpaint_engine})")
             rec.recon_pixel_count = int(np.count_nonzero(rmask))
             rec.recon_ratio = rec.recon_pixel_count / max(1, rmask.size)
             rec.recon_mask_size = (int(rmask.shape[1]), int(rmask.shape[0]))
@@ -339,8 +371,11 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         man.layers.append(rec)
 
     man.totals["generated_pixel_ratio"] = round(man.generated_ratio(), 6)
+    man.totals["deterministic_fill_ratio"] = round(man.deterministic_fill_ratio(), 6)
     man.totals["super_resolution_engine"] = sr_engine
     man.totals["super_resolution_generative"] = sr_generative
+    man.totals["deocclusion_engine"] = inpaint_engine
+    man.totals["deocclusion_generative"] = bool(getattr(inpaint_provider, "is_generative", False))
     man.totals["deocclusion_pixel_count"] = total_recon_px
 
     # PLATE 纯净性校验结果写入 manifest，供下游质检与回灌环节读取

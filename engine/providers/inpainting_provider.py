@@ -34,6 +34,11 @@ class LaMaInpaintingProvider(BaseInpaintingProvider):
     - 16GB memory shield on Intel Arc 140T (GPU.0)
     - Deterministic tile-level circuit breaker & CPU recovery
     """
+
+    # LaMa 是基于 FFC 的生成式补全模型，其输出属于"生成内容"，
+    # 按 §3.1 硬边界 1 不得进入 PLATE 制版线（仅 DESIGN 线可用）。
+    is_generative = True
+
     def __init__(
         self,
         model_path: Optional[str] = None,
@@ -332,8 +337,38 @@ class LaMaInpaintingProvider(BaseInpaintingProvider):
 
 
 class TeleaInpaintingProvider(BaseInpaintingProvider):
-    """Pure OpenCV Telea Inpainting fallback (Zero ML weights required)."""
+    """确定性补全（Telea / Navier-Stokes）—— PLATE 制版线专用。
+
+    与 `LaMaInpaintingProvider` 的关键区别：本实现是**经典图像修复算法**，
+    结果确定、可复算、不含模型幻觉，满足 §3.1 硬边界 1 对制版线的要求
+    （"任何生成式/扩散模型的输出不得进入 PLATE 线"）。
+
+    类名保留 Telea 是为了向后兼容早期仅实现 Telea 的版本。
+    """
+
+    #: 经典插值算法，非生成式模型 → PLATE 线可用
+    is_generative = False
+
+    #: telea    —— 快速行进法，细节保留好，适合中小区域
+    #: ns       —— Navier-Stokes，边界平滑，适合大面积匀色区
+    #: telea_ns —— 两者等权融合（默认），兼顾细节与平滑
+    METHODS = ("telea", "ns", "telea_ns")
+
+    def __init__(self, method: str = "telea_ns", radius: int = 5):
+        if method not in self.METHODS:
+            raise ValueError(f"未知补全方法: {method}（可选 {self.METHODS}）")
+        self.method = method
+        self.radius = max(1, int(radius))
+
     def inpaint(self, img_bgr: np.ndarray, mask_u8: np.ndarray) -> np.ndarray:
         if np.count_nonzero(mask_u8) == 0:
             return img_bgr.copy()
-        return cv2.inpaint(img_bgr, (mask_u8 > 0).astype(np.uint8)*255, 5, cv2.INPAINT_TELEA)
+        m = (mask_u8 > 0).astype(np.uint8) * 255
+        if self.method == "telea":
+            return cv2.inpaint(img_bgr, m, self.radius, cv2.INPAINT_TELEA)
+        if self.method == "ns":
+            return cv2.inpaint(img_bgr, m, self.radius, cv2.INPAINT_NS)
+        # 融合：Telea 保细节、NS 平大面积，等权叠加抑制各自伪影
+        telea = cv2.inpaint(img_bgr, m, self.radius, cv2.INPAINT_TELEA)
+        ns = cv2.inpaint(img_bgr, m, self.radius, cv2.INPAINT_NS)
+        return cv2.addWeighted(telea, 0.5, ns, 0.5, 0)
