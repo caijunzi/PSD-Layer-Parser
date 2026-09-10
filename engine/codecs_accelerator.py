@@ -45,9 +45,18 @@ def fast_compress_rle(fd, image, depth, version):
     """
     High-throughput multi-threaded SIMD RLE compressor for PSB Section 4 & 5.
     Encodes rows in parallel across available CPU cores and writes contiguous chunk buffers.
+
+    内存模型（2026-09-10 修复 OOM 隐患）：
+    旧实现把「全部行的压缩结果」同时存在 packed_rows 列表 + 一个 bytearray 里
+    （双份全量数据），16K 全画幅 CMYK 下二者合计可达 2~3 GB，
+    在 16 GB 内存的机器上有 OOM 风险。
+    现改为**分块流式**：每 CHUNK 行压缩后立即写盘，内存峰值降为单块
+    （256 行 × ~30KB ≈ 8 MB），长度表最后一次性回填（PSB 格式要求前置长度表）。
     """
     if depth == 1:
         raise ValueError("RLE compression is not supported for 1-bit images")
+
+    CHUNK_ROWS = 256  # 每块行数：兼顾并行吞吐与内存峰值
 
     start = fd.tell()
     num_rows = len(image)
@@ -58,25 +67,31 @@ def fast_compress_rle(fd, image, depth, version):
         fd.seek(num_rows * 4, 1)
         lengths = np.empty((num_rows,), dtype='>u4')
 
-    if util.needs_byteswap(image):
-        rows = [util.do_byteswap(row) for row in image]
-    else:
-        rows = image
+    needs_swap = util.needs_byteswap(image)
 
-    # Parallelize across CPU cores for large images
+    def _write_chunk(packed, offset):
+        buf = bytearray()
+        for j, p in enumerate(packed):
+            lengths[offset + j] = len(p)
+            buf.extend(p)
+        if buf:
+            fd.write(buf)
+
     if HAS_IMAGECODECS and num_rows >= 16:
         workers = min(8, os.cpu_count() or 4)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            packed_rows = list(pool.map(imagecodecs.packbits_encode, rows, chunksize=32))
+            for s in range(0, num_rows, CHUNK_ROWS):
+                chunk = image[s:s + CHUNK_ROWS]
+                if needs_swap:
+                    chunk = [util.do_byteswap(r) for r in chunk]
+                packed = list(pool.map(imagecodecs.packbits_encode, chunk, chunksize=32))
+                _write_chunk(packed, s)
     else:
-        packed_rows = [FastPackBitsAdapter.encode(r) for r in rows]
-
-    # Pre-calculate lengths and buffer writes into a single contiguous block
-    buf = bytearray()
-    for i, p in enumerate(packed_rows):
-        lengths[i] = len(p)
-        buf.extend(p)
-    fd.write(buf)
+        for s in range(0, num_rows, CHUNK_ROWS):
+            chunk = image[s:s + CHUNK_ROWS]
+            if needs_swap:
+                chunk = [util.do_byteswap(r) for r in chunk]
+            _write_chunk([FastPackBitsAdapter.encode(r) for r in chunk], s)
 
     end = fd.tell()
     fd.seek(start)
