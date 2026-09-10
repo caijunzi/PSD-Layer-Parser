@@ -37,18 +37,33 @@ def load_preset(preset_arg):
     with open(default_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance"):
+def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design"):
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
+    from engine.schemas.manifest import (
+        GENERATIVE_UPSCALE_ALLOWED,
+        LayerGenerationRecord,
+        OutputMode,
+        build_manifest,
+        write_mask_png,
+    )
     prof_settings = resolve_profile(profile)
     chosen_hw = device if device is not None else prof_settings.primary_device
 
+    mode = OutputMode.parse(output_mode)
+    if mode == OutputMode.BOTH:
+        raise ValueError("run_pipeline 只处理单一产品线；both 模式请在 main 中分别调用 plate 与 design")
+    use_generative_sr = GENERATIVE_UPSCALE_ALLOWED[mode]
+    is_plate = (mode == OutputMode.PLATE)
+
     print("=" * 65)
-    print("   UNIVERSAL MULTI-LAYER PSB PRODUCTION ENGINE v2.0   ")
+    print("   UNIVERSAL MULTI-LAYER PSB PRODUCTION ENGINE v2.1   ")
     print("=" * 65)
     print(f"[Engine] Input Image : {input_path}")
     print(f"[Engine] Output PSB  : {output_path}")
     print(f"[Engine] Preset      : {preset_name}")
+    print(f"[Engine] Output Mode : {mode.value.upper()} "
+          f"({'CMYK 制版线 · 禁用生成内容' if is_plate else 'RGBA 设计线 · 生成内容须标记'})")
     print(f"[Engine] Profile     : {prof_settings.display_name}")
     print(f"[Engine] Primary HW  : {chosen_hw.upper()} (Shield: {prof_settings.shield_device})")
 
@@ -177,24 +192,40 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     t0 = time.time()
     stages = preset.get("progressive_stages", [1.5, 2.0, 4.0])
     print(f"\n[第 5 步/共 6 步] 阶梯式超分辨率与引导滤波 (Progressive Super-Res Scaling to {out_w}x{out_h})...")
-    from engine.providers.realesrgan_provider import RealESRGANProvider
-    esrgan = RealESRGANProvider(
-        preferred_device=chosen_hw,
-        profile_name=profile,
-        tile_size=preset.get("tile_size", 512),
-        tile_pad=preset.get("tile_pad", 32),
-    )
-    if esrgan.backend and "openvino" in esrgan.backend:
-        print(f"  -> [Neural Super-Res] Real-ESRGAN 神经网络超分已激活 [{esrgan.backend}] (Tiled {esrgan.tile_size}px)")
-    else:
-        print(f"  -> [Guided Super-Res] 阶梯式高保真引导滤波就绪 [{esrgan.backend}]")
 
     super_res = UniversalTiledSuperRes(target_w=out_w, target_h=out_h)
-    
-    # 【方案 A 纯神经推理】调用 Real-ESRGAN 进行 100% 真实切片超分，彻底删除磁盘旧缓存直读
-    print(f"  -> [Real-ESRGAN] 启动全图真实神经切片超分辨率重建 ({w_lr}x{h_lr} -> {out_w}x{out_h})...")
-    src_hr = esrgan.upscale(src_lr, target_w=out_w, target_h=out_h)
-    print(f"  -> [Real-ESRGAN] 16K 超分母版神经推理完成: 实际输出={src_hr.shape}")
+
+    # -------------------------------------------------------------
+    # 超分策略按产品线隔离（ADR-011 / §3.1 硬边界 1）
+    #   PLATE 线：禁止生成式输出 —— 制版验收要求可复算、可对色、可过 TAC 审计，
+    #            故只走阶梯式 Lanczos + 引导滤波（确定性插值，不生成新结构）；
+    #   DESIGN 线：允许生成式超分，但 manifest 必须披露并输出生成区掩模。
+    # -------------------------------------------------------------
+    if use_generative_sr:
+        from engine.providers.realesrgan_provider import RealESRGANProvider
+        esrgan = RealESRGANProvider(
+            preferred_device=chosen_hw,
+            profile_name=profile,
+            tile_size=preset.get("tile_size", 512),
+            tile_pad=preset.get("tile_pad", 32),
+        )
+        if esrgan.backend and "openvino" in esrgan.backend:
+            print(f"  -> [Neural Super-Res] Real-ESRGAN 已激活 [{esrgan.backend}] (Tiled {esrgan.tile_size}px)")
+        else:
+            print(f"  -> [Neural Super-Res] Provider 已降级 [{esrgan.backend}]")
+        print(f"  -> [Real-ESRGAN] 启动全图神经切片超分重建 ({w_lr}x{h_lr} -> {out_w}x{out_h})...")
+        src_hr = esrgan.upscale(src_lr, target_w=out_w, target_h=out_h)
+        sr_engine = f"realesrgan:{esrgan.backend}"
+        sr_generative = True
+        print(f"  -> [Real-ESRGAN] 神经推理完成: 实际输出={src_hr.shape}  "
+              f"[DESIGN 线·生成式，已记入 manifest]")
+    else:
+        # PLATE 线：确定性插值，不引入生成结构
+        print(f"  -> [Deterministic Super-Res] PLATE 线禁用生成式超分，改用阶梯式 Lanczos + 引导滤波")
+        src_hr = super_res.upscale_image_progressive(src_lr, stages=stages)
+        sr_engine = "lanczos_guided_non_generative"
+        sr_generative = False
+        print(f"  -> [Deterministic Super-Res] 完成: 实际输出={src_hr.shape}  [PLATE 线·无生成内容]")
 
     # 纯净金箔底板超分辨率生成
     print(f"  -> [Super-Res] 阶梯式引导超分生成 16K 纯净金箔底板 ({out_w}x{out_h})...")
@@ -235,10 +266,95 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     t0 = time.time()
     from pytoshop import enums
     print(f"\n[第 6 步/共 6 步] 多图层 PSB 流式组装与 SIMD 极速编码 (DPI={target_dpi}, C-Accelerated RLE)...")
-    bg_name = "02_纯净金箔大底板_Gold_Base_Clean" if preset_name == "japanese_screen_gold" else "01_纯净画布底板_Base_Ground"
+    # 底板图层名从 preset 读取，消除原先 `if preset_name == "japanese_screen_gold"` 的品类硬编码分支（G1）
+    bg_name = preset.get("bg_layer_name", "01_纯净画布底板_Base_Ground")
     builder = UniversalPSBBuilder(target_w=out_w, target_h=out_h, dpi=target_dpi, compression=enums.Compression.rle)
     builder.build_psb(output_path, src_hr, bg_hr, sorted_layers, hr_masks_dict, bg_layer_name=bg_name)
     t_step6 = time.time() - t0
+
+    # -------------------------------------------------------------
+    # 交付清单（manifest）：把生成内容从「只打日志」改为随产物持久化（铁律 R1 / §3.1）
+    # -------------------------------------------------------------
+    from engine.core.models import new_run_id
+    run_id = new_run_id()
+    stem = os.path.splitext(os.path.basename(output_path))[0]
+    out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+    mask_dir = os.path.join(out_dir, f"{stem}.masks")
+    manifest_path = os.path.join(out_dir, f"{stem}.manifest.json")
+    os.makedirs(mask_dir, exist_ok=True)
+
+    man = build_manifest(
+        run_id=run_id,
+        output_mode=mode.value,
+        source_path=input_path,
+        source_wh=(w_lr, h_lr),
+        output_path=output_path,
+        output_wh=(out_w, out_h),
+        ppi=target_dpi,
+        color_mode="rgb",   # PLATE 的 CMYK 输出尚未接入（见尽调报告 P1-5），如实标注
+    )
+    man.generation_policy.declare(
+        "super_resolution", sr_engine, sr_generative, 1.0,
+        f"{w_lr}x{h_lr} -> {out_w}x{out_h}"
+    )
+    if deoc_res.success:
+        man.generation_policy.declare(
+            "deocclusion",
+            ("lama:" + str(lama_provider.backend)) if lama_provider is not None else "cv2.telea",
+            lama_provider is not None,
+            deoc_res.metrics.get("reconstruction_area_ratio", 0.0),
+            "2.5D 遮挡定向补全",
+        )
+
+    total_recon_px = 0
+    for lyr in sorted_layers:
+        name = lyr["name"]
+        rec = LayerGenerationRecord(name=name)
+
+        # (a) 生成式超分：作用于整层
+        if sr_generative:
+            rec.add_reason(f"super_resolution({sr_engine})")
+
+        # (b) 遮挡补全：精确掩码，落盘为 PNG 便于回灌时剔除
+        rmask = lyr.get("reconstruction_mask")
+        hr_mask = hr_masks_dict.get(name)
+        if hr_mask is not None:
+            pts = cv2.findNonZero(hr_mask)
+            if pts is not None:
+                rec.bbox = tuple(int(v) for v in cv2.boundingRect(pts))  # (x, y, w, h)
+                rx, ry, rw, rh = rec.bbox
+                rec.bbox = (rx, ry, rx + rw, ry + rh)                   # -> (l, t, r, b)
+        if rmask is not None and np.count_nonzero(rmask) > 0:
+            rec.add_reason("deocclusion")
+            rec.recon_pixel_count = int(np.count_nonzero(rmask))
+            rec.recon_ratio = rec.recon_pixel_count / max(1, rmask.size)
+            rec.recon_mask_size = (int(rmask.shape[1]), int(rmask.shape[0]))
+            mask_name = f"{name}.recon.png"
+            rec.recon_mask_path = f"{stem}.masks/{mask_name}"
+            # 图层名含中文，cv2.imwrite 在 Windows 上会静默失败（返回 True 但不写文件）
+            if not write_mask_png(os.path.join(mask_dir, mask_name), rmask):
+                print(f"  ⚠️  [Manifest] 掩码写入失败: {mask_name}")
+            total_recon_px += rec.recon_pixel_count
+
+        man.layers.append(rec)
+
+    man.totals["generated_pixel_ratio"] = round(man.generated_ratio(), 6)
+    man.totals["super_resolution_engine"] = sr_engine
+    man.totals["super_resolution_generative"] = sr_generative
+    man.totals["deocclusion_pixel_count"] = total_recon_px
+
+    # PLATE 纯净性校验结果写入 manifest，供下游质检与回灌环节读取
+    ok_plate, plate_msg = man.assert_plate_purity()
+    man.totals["plate_purity_ok"] = bool(ok_plate)
+    man.totals["plate_purity_message"] = plate_msg
+    man.save(manifest_path, mask_dir=None)
+
+    if is_plate and not ok_plate:
+        print(f"  ⚠️  [PLATE 纯净性告警] {plate_msg}")
+        print("      （依据 §3.1 硬边界 1：生成式模型输出不得进入 PLATE 线）")
+    print(f"  -> [Manifest] 交付清单已落盘: {manifest_path}")
+    print(f"  -> [Manifest] 生成内容披露: 超分引擎={sr_engine}(生成式={sr_generative})、"
+          f"补全像素={total_recon_px}、有效源={man.source['effective_ppi']} PPI")
 
     file_size_mb = os.path.getsize(output_path) / (1024 * 1024)
     file_size_gb = file_size_mb / 1024
@@ -284,16 +400,45 @@ if __name__ == "__main__":
         default=None,
         help="Low-level hardware override (optional, defaults to profile configuration)"
     )
+    parser.add_argument(
+        "--mode",
+        choices=["plate", "design", "both"],
+        default=None,
+        help="产品线（ADR-011）：plate=CMYK 制版线（禁用生成内容）；"
+             "design=RGBA 设计线（允许生成但须标记）；both=两条线各产一份。"
+             "留空则读 preset 的 output.mode，再兜底为 design"
+    )
 
     args = parser.parse_args()
-    run_pipeline(
-        input_path=args.input,
-        output_path=args.output,
-        preset_name=args.preset,
-        target_scale=args.scale,
-        target_w=args.width,
-        target_h=args.height,
-        dpi=args.dpi,
-        device=args.device,
-        profile=args.profile
-    )
+
+    # 产品线优先级：命令行 > preset.output.mode > design
+    mode = args.mode
+    if mode is None:
+        try:
+            mode = (load_preset(args.preset).get("output") or {}).get("mode") or "design"
+        except Exception:
+            mode = "design"
+
+    from engine.schemas.manifest import OutputMode
+    mode_enum = OutputMode.parse(mode)
+
+    if mode_enum == OutputMode.BOTH:
+        # 两条线各产一份，路径加后缀以避免互相覆盖
+        root, ext = os.path.splitext(args.output)
+        jobs = [(OutputMode.PLATE, f"{root}.plate{ext}"), (OutputMode.DESIGN, f"{root}.design{ext}")]
+    else:
+        jobs = [(mode_enum, args.output)]
+
+    for job_mode, job_out in jobs:
+        run_pipeline(
+            input_path=args.input,
+            output_path=job_out,
+            preset_name=args.preset,
+            target_scale=args.scale,
+            target_w=args.width,
+            target_h=args.height,
+            dpi=args.dpi,
+            device=args.device,
+            profile=args.profile,
+            output_mode=job_mode.value,
+        )

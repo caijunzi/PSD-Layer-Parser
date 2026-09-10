@@ -1,6 +1,10 @@
 {
     "preset_name": "japanese_screen_gold",
     "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
+    "output": {
+        "mode": "design"
+    },
+    "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
     "background_mode": "paper_or_gold_screen",
     "panel_count": 6,
     "dpi": 150.0,
