@@ -1,24 +1,25 @@
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 import os
 
 def run_deocclusion(source_path="inputs/source_4000.jpg", mask_dir="intermediate", output_dir="intermediate"):
     os.makedirs(output_dir, exist_ok=True)
-    src = cv2.imread(source_path)
+    src = imread_unicode(source_path)
     if src is None:
         raise FileNotFoundError(f"Cannot read {source_path}")
     
     h, w, c = src.shape
     
-    m_ink = cv2.imread(os.path.join(mask_dir, "mask_ink_total.png"), 0)
-    m_figures = cv2.imread(os.path.join(mask_dir, "mask_07_figures.png"), 0)
-    m_trees_a = cv2.imread(os.path.join(mask_dir, "mask_05A_barren_trees.png"), 0)
-    m_trees_b = cv2.imread(os.path.join(mask_dir, "mask_05B_water_trees.png"), 0)
+    m_ink = imread_unicode(os.path.join(mask_dir, "mask_ink_total.png"), 0)
+    m_figures = imread_unicode(os.path.join(mask_dir, "mask_07_figures.png"), 0)
+    m_trees_a = imread_unicode(os.path.join(mask_dir, "mask_05A_barren_trees.png"), 0)
+    m_trees_b = imread_unicode(os.path.join(mask_dir, "mask_05B_water_trees.png"), 0)
     m_trees = cv2.bitwise_or(m_trees_a, m_trees_b)
-    m_pavilion = cv2.imread(os.path.join(mask_dir, "mask_06_pavilion.png"), 0)
-    m_rocks_a = cv2.imread(os.path.join(mask_dir, "mask_04A_foreground_cliffs.png"), 0)
-    m_rocks_b = cv2.imread(os.path.join(mask_dir, "mask_04B_shorelines.png"), 0)
-    m_rocks_c = cv2.imread(os.path.join(mask_dir, "mask_04C_solitary_rock.png"), 0)
+    m_pavilion = imread_unicode(os.path.join(mask_dir, "mask_06_pavilion.png"), 0)
+    m_rocks_a = imread_unicode(os.path.join(mask_dir, "mask_04A_foreground_cliffs.png"), 0)
+    m_rocks_b = imread_unicode(os.path.join(mask_dir, "mask_04B_shorelines.png"), 0)
+    m_rocks_c = imread_unicode(os.path.join(mask_dir, "mask_04C_solitary_rock.png"), 0)
     m_rocks = cv2.bitwise_or(m_rocks_a, cv2.bitwise_or(m_rocks_b, m_rocks_c))
 
     # 1. 2.5D 解闭环：人物遮挡的草堂坐榻与立柱
@@ -26,14 +27,14 @@ def run_deocclusion(source_path="inputs/source_4000.jpg", mask_dir="intermediate
     fig_dil = cv2.dilate(m_figures, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
     pav_covered = cv2.bitwise_and(fig_dil, m_pavilion)
     inpainted_pavilion = cv2.inpaint(src, pav_covered, 7, cv2.INPAINT_NS)
-    cv2.imwrite(os.path.join(output_dir, "inpainted_pavilion_4k.png"), inpainted_pavilion)
+    imwrite_unicode(os.path.join(output_dir, "inpainted_pavilion_4k.png"), inpainted_pavilion)
 
     # 2. 2.5D 解闭环：树干遮挡的山石皴纹
     print("[Phase 3] 2. 2.5D 解闭环：补全被枯树遮挡的山石纹理...")
     tree_dil = cv2.dilate(m_trees, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
     rock_covered = cv2.bitwise_and(tree_dil, m_rocks)
     inpainted_rocks = cv2.inpaint(src, rock_covered, 7, cv2.INPAINT_NS)
-    cv2.imwrite(os.path.join(output_dir, "inpainted_rocks_4k.png"), inpainted_rocks)
+    imwrite_unicode(os.path.join(output_dir, "inpainted_rocks_4k.png"), inpainted_rocks)
 
     # 3. 重构博物馆级纯净金箔大底板 (Gold_Base_Clean)
     # 基于六曲屏风物理结构：第 1 曲 (Panel 1) 为未作画之纯金箔地，含完整金箔方格肌理与自然风化包浆
@@ -77,14 +78,14 @@ def run_deocclusion(source_path="inputs/source_4000.jpg", mask_dir="intermediate
         blended_slice = curr_slice.astype(np.float32) * (1.0 - alpha_p) + p_gold_adj.astype(np.float32) * alpha_p
         gold_base[inner_t:inner_b, px0:px1] = np.clip(blended_slice, 0, 255).astype(np.uint8)
 
-    cv2.imwrite(os.path.join(output_dir, "gold_base_clean_4k.png"), gold_base)
+    imwrite_unicode(os.path.join(output_dir, "gold_base_clean_4k.png"), gold_base)
 
     # 4. 提取金箔方格网格肌理
     gray_gold = cv2.cvtColor(gold_base, cv2.COLOR_BGR2GRAY)
     foil_blur = cv2.GaussianBlur(gray_gold, (31, 31), 10)
     foil_texture = cv2.subtract(gray_gold, foil_blur)
     foil_norm = cv2.normalize(foil_texture, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    cv2.imwrite(os.path.join(output_dir, "gold_foil_grid_4k.png"), foil_norm)
+    imwrite_unicode(os.path.join(output_dir, "gold_foil_grid_4k.png"), foil_norm)
 
     print("[Phase 3 Complete] 纯净金地底板与 2.5D 解闭环修复完成。")
 

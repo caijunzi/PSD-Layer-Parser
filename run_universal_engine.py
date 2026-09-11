@@ -5,6 +5,7 @@ Usage:
     python run_universal_engine.py --input inputs/source_4000.jpg --output outputs/universal_output.psb --preset traditional_chinese_ink
 """
 import os
+import re
 import sys
 import json
 import time
@@ -14,6 +15,7 @@ import cv2
 import numpy as np
 
 # Preset 加载唯一入口（SSOT）：provider 与入口脚本共用，避免引擎反向依赖入口脚本
+from engine.core.io_utils import imread_unicode
 from engine.schemas.presets import (
     load_preset as _load_preset_file,
     match_layer_attributes,
@@ -75,7 +77,10 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
             "target_size": (src_lr.shape[1], src_lr.shape[0]),
         })
         if res.success:
-            diecut = res.data.get("diecut_mask") or res.data.get("mask")
+            # ⚠️ numpy 数组禁用 `or`（truth value ambiguous），必须显式判 None
+            diecut = res.data.get("diecut_mask")
+            if diecut is None:
+                diecut = res.data.get("mask")
             n_holes = int(res.metrics.get("hole_count", 0) or 0)
             if diecut is not None and n_holes > 0:
                 extra_layers.append({
@@ -191,7 +196,9 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     preset = load_preset(preset_name)
-    src_lr = cv2.imread(input_path)
+    # ⚠️ cv2.imread 对含非 ASCII 字符的路径（如中文工作区）会静默返回 None——
+    # 用户从 IDE / 一键 bat 传绝对路径是常态，必须走 Unicode 安全读取
+    src_lr = imread_unicode(input_path)
     if src_lr is None:
         raise ValueError(f"Could not load image: {input_path}")
 
@@ -217,6 +224,15 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     from engine.providers.grounded_sam_provider import GroundedSAMProvider
     grounded_sam = GroundedSAMProvider(preferred_device=chosen_hw, preset_name=preset_name)
     masks_dict = grounded_sam.segment_objects(src_lr, classes=preset.get("ai_semantic_classes"))
+    # 品类语义白名单（G2）：规则引擎的类集合是屏风系内置的，非屏风品类若不过滤，
+    # 会把假阳性层（如壁布图上的「人物/建筑」）带进产物。preset 配置了
+    # rule_class_allowlist（含空数组）即启用白名单；未配置则保持旧行为不过滤。
+    rule_allow = preset.get("rule_class_allowlist")
+    if isinstance(rule_allow, list):
+        dropped = [k for k in masks_dict if k not in set(rule_allow)]
+        for k in dropped:
+            print(f"     - [allowlist] 丢弃非品类层: {k} ({np.count_nonzero(masks_dict[k])} px)")
+        masks_dict = {k: v for k, v in masks_dict.items() if k in set(rule_allow)}
     print(f"  -> [{grounded_sam.backend}] 成功提取 {len(masks_dict)} 个解耦语义对象掩模:")
     for mname, mdata in sorted(masks_dict.items()):
         print(f"     * {mname:<38}: {np.count_nonzero(mdata):>8} 像素")
@@ -520,9 +536,11 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
             rec.recon_pixel_count = int(np.count_nonzero(rmask))
             rec.recon_ratio = rec.recon_pixel_count / max(1, rmask.size)
             rec.recon_mask_size = (int(rmask.shape[1]), int(rmask.shape[0]))
-            mask_name = f"{name}.recon.png"
+            # 掩码文件名用 ASCII slug（跨平台/工具链安全）；中英文完整图层名
+            # 保留在 manifest 的 name 字段与 PSB 图层名（交付显示文本）
+            slug = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_") or "layer"
+            mask_name = f"{slug}.recon.png"
             rec.recon_mask_path = f"{stem}.masks/{mask_name}"
-            # 图层名含中文，cv2.imwrite 在 Windows 上会静默失败（返回 True 但不写文件）
             if not write_mask_png(os.path.join(mask_dir, mask_name), rmask):
                 print(f"  ⚠️  [Manifest] 掩码写入失败: {mask_name}")
             total_recon_px += rec.recon_pixel_count

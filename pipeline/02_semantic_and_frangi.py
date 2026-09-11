@@ -1,10 +1,11 @@
 import os
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 
 def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="intermediate"):
     os.makedirs(output_dir, exist_ok=True)
-    src = cv2.imread(source_path)
+    src = imread_unicode(source_path)
     if src is None:
         raise FileNotFoundError(f"Cannot read {source_path}")
     
@@ -31,7 +32,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     seal_roi[415:495, 3440:3520] = True
     m_09a = m_red & seal_roi
     m_09a = cv2.morphologyEx(m_09a.astype(np.uint8)*255, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))) > 0
-    cv2.imwrite(os.path.join(output_dir, "mask_09A_seal.png"), (m_09a * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_09A_seal.png"), (m_09a * 255).astype(np.uint8))
     print(f"[Phase 2] 09A 朱砂印章: {np.count_nonzero(m_09a)} 像素")
 
     # ==========================================
@@ -46,7 +47,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= 6: # 滤除背景微小金箔噪点
             m_09b |= (labels == i)
-    cv2.imwrite(os.path.join(output_dir, "mask_09B_calligraphy.png"), (m_09b * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_09B_calligraphy.png"), (m_09b * 255).astype(np.uint8))
     print(f"[Phase 2] 09B 题跋款识: {np.count_nonzero(m_09b)} 像素")
 
     # ==========================================
@@ -61,7 +62,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] >= 6:
             m_08 |= (labels == i)
-    cv2.imwrite(os.path.join(output_dir, "mask_08_geese.png"), (m_08 * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_08_geese.png"), (m_08 * 255).astype(np.uint8))
     print(f"[Phase 2] 08 飞禽微物: {np.count_nonzero(m_08)} 像素")
 
     # ==========================================
@@ -76,7 +77,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     fig_roi = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(fig_roi, [fig_poly], 255)
     m_07 = active_ink & (fig_roi > 0)
-    cv2.imwrite(os.path.join(output_dir, "mask_07_figures.png"), (m_07 * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_07_figures.png"), (m_07 * 255).astype(np.uint8))
     print(f"[Phase 2] 07 点景人物: {np.count_nonzero(m_07)} 像素")
 
     # ==========================================
@@ -90,7 +91,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     pav_roi = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(pav_roi, [pav_poly], 255)
     m_06 = active_ink & (pav_roi > 0)
-    cv2.imwrite(os.path.join(output_dir, "mask_06_pavilion.png"), (m_06 * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_06_pavilion.png"), (m_06 * 255).astype(np.uint8))
     print(f"[Phase 2] 06 建筑陈设: {np.count_nonzero(m_06)} 像素")
 
     # ==========================================
@@ -102,7 +103,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     rock_c_roi = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(rock_c_roi, [rock_c_poly], 255)
     m_04c = active_ink & (rock_c_roi > 0)
-    cv2.imwrite(os.path.join(output_dir, "mask_04C_solitary_rock.png"), (m_04c * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_04C_solitary_rock.png"), (m_04c * 255).astype(np.uint8))
     print(f"[Phase 2] 04C 水中孤石: {np.count_nonzero(m_04c)} 像素")
 
     # ==========================================
@@ -118,8 +119,8 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     ground_base_y = np.clip(1160 + (x_coords - 1450) * (1250 - 1160) / (2260 - 1450), 1160, 1280)
     m_04b = spit_ink & (y_grid >= ground_base_y[None, :])
     m_05b = spit_ink & (y_grid < ground_base_y[None, :])
-    cv2.imwrite(os.path.join(output_dir, "mask_04B_shorelines.png"), (m_04b * 255).astype(np.uint8))
-    cv2.imwrite(os.path.join(output_dir, "mask_05B_water_trees.png"), (m_05b * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_04B_shorelines.png"), (m_04b * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_05B_water_trees.png"), (m_05b * 255).astype(np.uint8))
     print(f"[Phase 2] 04B 中景渚岸: {np.count_nonzero(m_04b)} 像素")
     print(f"[Phase 2] 05B 渚上水木: {np.count_nonzero(m_05b)} 像素")
 
@@ -135,7 +136,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     kernel_dist = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
     m_04d = cv2.morphologyEx(m_04d.astype(np.uint8)*255, cv2.MORPH_CLOSE, kernel_dist) > 0
     m_04d = m_04d & (~m_09a) & (~m_09b) & (dist_mask > 0)
-    cv2.imwrite(os.path.join(output_dir, "mask_04D_distant_mountain.png"), (m_04d * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_04D_distant_mountain.png"), (m_04d * 255).astype(np.uint8))
     print(f"[Phase 2] 04D 淡墨远山: {np.count_nonzero(m_04d)} 像素")
 
     # ==========================================
@@ -161,7 +162,7 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     trees_sky_roi |= (x_grid > 3450) & (x_grid <= 3745) & (y_grid >= 600) & (y_grid < 1100)
 
     m_05a = active_ink & trees_sky_roi & (~m_09a) & (~m_09b) & (~m_08) & (~m_06) & (~m_04d)
-    cv2.imwrite(os.path.join(output_dir, "mask_05A_barren_trees.png"), (m_05a * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_05A_barren_trees.png"), (m_05a * 255).astype(np.uint8))
     print(f"[Phase 2] 05A 枯木树群: {np.count_nonzero(m_05a)} 像素")
 
     # 10. Level 04A: Foreground Dark Cliffs & Mountain Masses (连续完整山石叠嶂)
@@ -173,19 +174,19 @@ def build_semantic_masks(source_path="inputs/source_4000.jpg", output_dir="inter
     cliffs_roi |= (x_grid > 3450) & (x_grid <= 3745) & (y_grid >= 750) & (y_grid <= 1745)
 
     m_04a = active_ink & cliffs_roi & (~m_05a) & (~m_09a) & (~m_09b) & (~m_08) & (~m_04d)
-    cv2.imwrite(os.path.join(output_dir, "mask_04A_foreground_cliffs.png"), (m_04a * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_04A_foreground_cliffs.png"), (m_04a * 255).astype(np.uint8))
     print(f"[Phase 2] 04A 山石叠嶂: {np.count_nonzero(m_04a)} 像素")
 
     # ==========================================
     # 11. Level 03: Water Ripples (所有水面波澜)
     # ==========================================
     m_03 = active_ink & (x_coords[None, :] < 2260) & (~m_09a) & (~m_09b) & (~m_08) & (~m_04c) & (~m_04b) & (~m_05b)
-    cv2.imwrite(os.path.join(output_dir, "mask_03_water_ripples.png"), (m_03 * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_03_water_ripples.png"), (m_03 * 255).astype(np.uint8))
     print(f"[Phase 2] 03 水流微澜: {np.count_nonzero(m_03)} 像素")
 
     # 保存总墨迹掩模
     m_ink_total = m_09a | m_09b | m_08 | m_07 | m_06 | m_05a | m_05b | m_04a | m_04b | m_04c | m_04d | m_03
-    cv2.imwrite(os.path.join(output_dir, "mask_ink_total.png"), (m_ink_total * 255).astype(np.uint8))
+    imwrite_unicode(os.path.join(output_dir, "mask_ink_total.png"), (m_ink_total * 255).astype(np.uint8))
     print(f"[Phase 2 Complete] 所有 12 项对象级掩模全部生成完毕，总墨迹像素: {np.count_nonzero(m_ink_total)}。")
 
 if __name__ == "__main__":

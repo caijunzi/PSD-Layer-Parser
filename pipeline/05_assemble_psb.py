@@ -1,7 +1,8 @@
 ﻿import os
 import gc
 import time
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 from pytoshop import enums, core
 from pytoshop.user import nested_layers
@@ -14,8 +15,8 @@ def assemble_master_psb(output_path="outputs/Rosetsu_1795_Master_16k.psb"):
     t_start = time.time()
 
     print("[Phase 5] 1. 加载 16K 超分原图与纯净金底...")
-    src_16k = cv2.imread("intermediate/source_16k.jpg")
-    gold_16k = cv2.imread("intermediate/gold_base_clean_16k.jpg")
+    src_16k = imread_unicode("intermediate/source_16k.jpg")
+    gold_16k = imread_unicode("intermediate/gold_base_clean_16k.jpg")
     
     if src_16k is None or gold_16k is None:
         raise FileNotFoundError("16K 源文件缺失")
@@ -30,7 +31,7 @@ def assemble_master_psb(output_path="outputs/Rosetsu_1795_Master_16k.psb"):
 
     # 图层裁剪与构建辅助函数
     def create_layer_from_mask(name, mask_path, blend_mode=enums.BlendMode.normal, opacity=255, fixed_color=None):
-        m = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        m = imread_unicode(mask_path, cv2.IMREAD_GRAYSCALE)
         if m is None:
             print(f"警告: 找不到掩模 {mask_path}，跳过")
             return None

@@ -32,7 +32,10 @@ class UniversalBackgroundExtractor:
 
         # 0. If pre-extracted / cached clean background is provided and valid, prioritize it
         if cached_bg_path and os.path.isfile(cached_bg_path):
-            cached = cv2.imread(cached_bg_path)
+            # cv2.imread 对含非 ASCII 字符的路径会静默返回 None，必须走 imdecode
+            from engine.core.io_utils import imread_unicode
+
+            cached = imread_unicode(cached_bg_path)
             if cached is not None:
                 if cached.shape[:2] != (h, w):
                     cached = cv2.resize(cached, (w, h), interpolation=cv2.INTER_LANCZOS4)

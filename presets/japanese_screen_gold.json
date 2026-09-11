@@ -1,6 +1,15 @@
 {
     "preset_name": "japanese_screen_gold",
     "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
+    "ai_semantic_classes": [
+        {"name": "08_芦雁群禽_Geese_Flock", "prompt": "wild goose . flock of birds . flying geese ."},
+        {"name": "07_高士侍童人物_Figures_Scholar_Attendant", "prompt": "scholar . person . attendant . human figure ."},
+        {"name": "06_水榭草堂建筑_Architecture_Pavilion", "prompt": "pavilion . hut . thatched cottage . architecture ."},
+        {"name": "05A_前景寒林枯木_Foreground_Barren_Trees", "prompt": "barren trees . pine trees . winter branches ."},
+        {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "prompt": "dark cliff . mountain rock . shoreline rocks ."},
+        {"name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo", "prompt": "red stamp . cinnabar seal . square seal ."},
+        {"name": "09B_题跋落款墨书_Calligraphy_Inscription", "prompt": "ink calligraphy . signature inscription . vertical chinese characters ."}
+    ],
     "output": {
         "mode": "design"
     },

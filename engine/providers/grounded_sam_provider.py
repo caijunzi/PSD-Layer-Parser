@@ -250,16 +250,13 @@ class GroundedSAMProvider:
         # 初始化 SAM 2 图像特征
         self.sam_predictor.set_image(img_rgb)
 
+        # 品类语义（含中文图层名）一律来自 preset.ai_semantic_classes（SSOT）。
+        # 内置的屏风默认表已删除——provider 是品类无关的引擎层，
+        # 未配置语义类时跳过神经检测，仅走规则引擎并明示原因，
+        # 避免「新品类静默拿到屏风语义」的隐性错误。
         if not classes:
-            classes = [
-                {"name": "08_芦雁群禽_Geese_Flock", "prompt": "wild goose . flock of birds . flying geese ."},
-                {"name": "07_高士侍童人物_Figures_Scholar_Attendant", "prompt": "scholar . person . attendant . human figure ."},
-                {"name": "06_水榭草堂建筑_Architecture_Pavilion", "prompt": "pavilion . hut . thatched cottage . architecture ."},
-                {"name": "05A_前景寒林枯木_Foreground_Barren_Trees", "prompt": "barren trees . pine trees . winter branches ."},
-                {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "prompt": "dark cliff . mountain rock . shoreline rocks ."},
-                {"name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo", "prompt": "red stamp . cinnabar seal . square seal ."},
-                {"name": "09B_题跋落款墨书_Calligraphy_Inscription", "prompt": "ink calligraphy . signature inscription . vertical chinese characters ."},
-            ]
+            print("[GroundedSAMProvider] preset 未配置 ai_semantic_classes，跳过神经检测（仅规则引擎）")
+            return {}
 
         results = {}
         for cls_info in classes:

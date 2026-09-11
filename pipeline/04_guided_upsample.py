@@ -1,4 +1,5 @@
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 import os
 import glob
@@ -51,22 +52,22 @@ def run_guided_upsample():
     source_16k_path = "intermediate/source_16k.jpg"
     if not os.path.exists(source_16k_path):
         print(f"[Phase 4] 正在将 source_4000 超分放大至 16000x7808 (Lanczos-4)...")
-        src_4k = cv2.imread("inputs/source_4000.jpg")
+        src_4k = imread_unicode("inputs/source_4000.jpg")
         src_16k = cv2.resize(src_4k, (TARGET_W, TARGET_H), interpolation=cv2.INTER_LANCZOS4)
-        cv2.imwrite(source_16k_path, src_16k, [cv2.IMWRITE_JPEG_QUALITY, 96])
+        imwrite_unicode(source_16k_path, src_16k, [cv2.IMWRITE_JPEG_QUALITY, 96])
         print(f"[Phase 4] source_16k.jpg 生成完毕。")
 
     # 2. 重新超分生成 16K 纯净金地
     gold_16k_path = "intermediate/gold_base_clean_16k.jpg"
     print(f"[Phase 4] 正在将全新 gold_base_clean_4k 超分放大至 16000x7808...")
-    gold_4k = cv2.imread("intermediate/gold_base_clean_4k.png")
+    gold_4k = imread_unicode("intermediate/gold_base_clean_4k.png")
     gold_16k = cv2.resize(gold_4k, (TARGET_W, TARGET_H), interpolation=cv2.INTER_LANCZOS4)
-    cv2.imwrite(gold_16k_path, gold_16k, [cv2.IMWRITE_JPEG_QUALITY, 96])
+    imwrite_unicode(gold_16k_path, gold_16k, [cv2.IMWRITE_JPEG_QUALITY, 96])
     print(f"[Phase 4] gold_base_clean_16k.jpg 生成完毕。")
 
     # 3. 加载 16K 灰度引导通道
     print("[Phase 4] 加载 16K 灰度引导通道...")
-    src_16k = cv2.imread(source_16k_path)
+    src_16k = imread_unicode(source_16k_path)
     guide_16k = cv2.cvtColor(src_16k, cv2.COLOR_BGR2GRAY)
     del src_16k
 
@@ -82,7 +83,7 @@ def run_guided_upsample():
             continue
             
         t0 = time.time()
-        m_4k = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
+        m_4k = imread_unicode(mf, cv2.IMREAD_GRAYSCALE)
         m_16k_raw = cv2.resize(m_4k, (TARGET_W, TARGET_H), interpolation=cv2.INTER_LINEAR)
         
         if "seal" in fname or "geese" in fname or "calligraphy" in fname:
@@ -92,7 +93,7 @@ def run_guided_upsample():
         else:
             m_16k_refined = guided_filter_banded(guide_16k, m_16k_raw, radius=8, eps=1e-2)
             
-        cv2.imwrite(out_path, m_16k_refined, [cv2.IMWRITE_PNG_COMPRESSION, 3])
+        imwrite_unicode(out_path, m_16k_refined, [cv2.IMWRITE_PNG_COMPRESSION, 3])
         print(f"[Phase 4] {fname} -> 16000x7808 导向滤波完成 ({time.time()-t0:.2f}s)")
 
     print("[Phase 4 Complete] 所有 16K 高精度导向蒙版全部重新生成完毕。")

@@ -20,7 +20,8 @@ import json
 import os
 import sys
 
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 import psd_tools
 
@@ -99,7 +100,7 @@ def verify(
     print(f"Composite Mean RGB: {comp_arr.mean(axis=(0, 1)).round(2)}, "
           f"Std: {comp_arr.std(axis=(0, 1)).round(2)}")
 
-    src = cv2.imread(source_path) if os.path.isfile(source_path) else None
+    src = imread_unicode(source_path) if os.path.isfile(source_path) else None
     if src is None:
         print(f"[WARN] 源图 {source_path} 不存在，跳过色差比对")
         rep.record("V-04", "合成保真度", True, "跳过（无源图）")

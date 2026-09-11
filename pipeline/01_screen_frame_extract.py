@@ -1,10 +1,11 @@
-import cv2
+import cv2  # noqa: F401 (其余 cv2 能力仍在用)
+from engine.core.io_utils import imread_unicode, imwrite_unicode
 import numpy as np
 import os
 
 def extract_frame_and_seams(source_path="inputs/source_4000.jpg", output_dir="intermediate"):
     os.makedirs(output_dir, exist_ok=True)
-    src = cv2.imread(source_path)
+    src = imread_unicode(source_path)
     if src is None:
         raise FileNotFoundError(f"Cannot read {source_path}")
     
@@ -34,12 +35,12 @@ def extract_frame_and_seams(source_path="inputs/source_4000.jpg", output_dir="in
     mask_10a_frame[inner_t:inner_b, inner_l:inner_r] = 0
     
     mask_10a_frame = cv2.GaussianBlur(mask_10a_frame, (3, 3), 0.8)
-    cv2.imwrite(os.path.join(output_dir, "mask_10A_frame.png"), mask_10a_frame)
+    imwrite_unicode(os.path.join(output_dir, "mask_10A_frame.png"), mask_10a_frame)
 
     # 4. 生成画心有效区域蒙版（Painting ROI），用于后续各图层约束
     painting_roi = np.zeros((h, w), dtype=np.uint8)
     painting_roi[inner_t:inner_b, inner_l:inner_r] = 255
-    cv2.imwrite(os.path.join(output_dir, "mask_painting_roi.png"), painting_roi)
+    imwrite_unicode(os.path.join(output_dir, "mask_painting_roi.png"), painting_roi)
 
     # 5. 精确检测屏风 5 道纵向折缝 (六曲屏风)
     seams_x = []
@@ -59,7 +60,7 @@ def extract_frame_and_seams(source_path="inputs/source_4000.jpg", output_dir="in
 
     mask_10b_seams = cv2.GaussianBlur(mask_10b_seams, (7, 7), 1.8)
     mask_10b_seams = cv2.bitwise_and(mask_10b_seams, painting_roi)
-    cv2.imwrite(os.path.join(output_dir, "mask_10B_seams.png"), mask_10b_seams)
+    imwrite_unicode(os.path.join(output_dir, "mask_10B_seams.png"), mask_10b_seams)
 
     print(f"[Phase 1 Complete] mask_10A_frame.png, mask_10B_seams.png, mask_painting_roi.png 成功生成。")
     return {

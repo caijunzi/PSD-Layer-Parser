@@ -1,53 +1,57 @@
 {
     "preset_name": "textile_damask",
-    "description": "软装装饰壁布/大马士革巴洛克小样 1:1 工业分层印前制版预设",
-    "version": "1.0.0",
-    "pipeline": "textile_damask",
-    "specs": {
-        "dpi": 150.0,
-        "physical_width_mm": 900.0,
-        "physical_height_mm": 1600.0,
-        "target_pixels": [5315, 9449],
-        "color_mode": "CMYK",
-        "channels": 4
+    "description": "软装装饰壁布/大马士革纹样 1:1 工业分层印前制版预设（2026-09-11 按新引擎契约重写：双产品线 + 印前算子 + 品类语义 SSOT）",
+    "version": "2.0.0",
+
+    "output": {
+        "mode": "plate",
+        "color_mode": "cmyk"
     },
-    "rectification": {
-        "mode": "plan_a_true_edge",
-        "cut_top_y": 0,
-        "min_safe_bottom_y": 718,
-        "preserve_medallion": true,
-        "seam_flow_harmonization": true
+    "dpi": 150.0,
+    "bg_layer_name": "01_象牙织物底板_Ivory_Fabric_Base",
+    "background_mode": "fabric_substrate",
+    "plate_inpaint_method": "telea_ns",
+
+    "print_condition": "iso_uncoated",
+
+    "ai_semantic_classes": [
+        {
+            "name": "03_金箔卷草纹样_Gold_Filigree_Motif",
+            "prompt": "gold foil ornament . golden filigree scrollwork . gilded pattern ."
+        },
+        {
+            "name": "02_巴洛克团花_Baroque_Medallion",
+            "prompt": "floral medallion . damask flower motif . ornate floral pattern ."
+        }
+    ],
+
+    "rule_class_allowlist": ["02_巴洛克团花_Baroque_Medallion"],
+
+    "layer_semantics": {
+        "name_mapping": {},
+        "layer_attributes": [
+            {
+                "match": ["金箔", "gold", "foil"],
+                "blend_mode": "NORMAL",
+                "opacity": 255,
+                "comment": "金箔专色层不参与正片叠底（烫金为独立印版）"
+            }
+        ]
     },
-    "operators": {
+
+    "plate_operators": {
+        "contour_protection": { "enabled": true },
         "micro_holes": {
             "enabled": true,
-            "sigma1": 0.9,
-            "sigma2": 2.0,
-            "threshold": 4.5,
-            "base_rx": 1.9,
-            "base_ry": 2.3,
-            "gated_by_fabric_mask": true
+            "params": { "dog_threshold": 5.0 },
+            "layer_name": "12_激光冲孔挂点_DieCut_Perforations"
         },
-        "metallic_foil": {
+        "trapping": {
             "enabled": true,
-            "separate_copper": true,
-            "adaptive_cielab_clustering": true,
-            "min_redness_a": 140,
-            "min_red_blue_diff": 90,
-            "min_red_green_diff": 35
-        },
-        "substrate": {
-            "name": "Luxury Ivory Fabric",
-            "c_pct": 2.0,
-            "m_pct": 3.0,
-            "y_pct": 8.0,
-            "k_pct": 0.0
+            "spot_layer_name": "02_巴洛克团花_Baroque_Medallion",
+            "layer_name": "11_烫金陷印_Foil_Trap_Spot",
+            "params": { "trap_mm": 0.2, "trap_type": "spread" },
+            "comment": "工程验证用团花层充作专色；生产时 spot 应指向烫金版图层"
         }
-    },
-    "output_layers": [
-        "04_Print_Rose_Copper_CMYK",
-        "03_Print_Antique_Gold_CMYK",
-        "02_DieCut_Perforations_Mask",
-        "01_Base_Substrate_CMYK"
-    ]
+    }
 }
