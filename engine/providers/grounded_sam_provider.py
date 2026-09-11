@@ -248,12 +248,14 @@ class GroundedSAMProvider:
 
         # 4. 弥散门（统一作用于神经与规则两条产路的最终结果）：
         #    SAM 对远山/峭壁等无边界山水元素会产出全画布碎片掩模，
-        #    合成时雾化污染（2026-09-11 山水图验收实测）。弥散层不产出。
+        #    合成时雾化污染（2026-09-11 山水图验收实测）。弥散层不产出，
+        #    但留存到 rejected_masks 供调试与密度精修（不进最终产物）。
         diffuse_rejected = []
+        self.rejected_masks: dict = {}
         for k in list(final_masks.keys()):
             reason = self._diffuse_check(k, final_masks[k])
             if reason:
-                del final_masks[k]
+                self.rejected_masks[k] = final_masks.pop(k)
                 diffuse_rejected.append(f"{k}（{reason}）")
         if diffuse_rejected:
             print(f"[GroundedSAMProvider] ⚠️  弥散门拒绝 {len(diffuse_rejected)} 个层（不产出）：")
