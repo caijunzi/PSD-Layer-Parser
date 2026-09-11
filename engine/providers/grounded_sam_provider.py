@@ -62,6 +62,22 @@ DEFAULT_TEXT_THRESHOLD = 0.25
 # 单框面积上限（占全画布），超过视为"把背景框进来了"
 MAX_BOX_AREA_RATIO = 0.08
 
+# 弥散掩模门（2026-09-11 山水图验收引入）：内容层掩模的外接框覆盖比超过此值
+# 即判定"弥散"（SAM 对远山/峭壁等无边界山水元素天然产出全画布碎片掩模，
+# 合成时雾化污染右半屏）。豁免表覆盖天然全画布的装饰/底板层。
+MAX_BBOX_AREA_RATIO = 0.5
+
+BBOX_EXEMPT_KEYWORDS: tuple[str, ...] = (
+    "base", "底板",           # 金箔/织物底板天然全画布
+    "frame", "外框", "brocade", "绫边",  # 外框环天然全画布
+    "fold", "seam", "折痕",   # 折缝贯穿全画布（V2 实测 47% 靠近阈值，一并豁免）
+)
+
+
+def is_bbox_exempt(layer_name: str) -> bool:
+    low = str(layer_name).lower()
+    return any(k in low for k in BBOX_EXEMPT_KEYWORDS)
+
 
 def area_budget_for(layer_name: str) -> float:
     """按图层名关键词返回该类元素的面积预算（占全画布比例）。"""
@@ -175,6 +191,7 @@ class GroundedSAMProvider:
             print(f"[GroundedSAMProvider] Neural models init note: {e}, falling back to rule engine")
 
         self.backend = "fallback_rule_based"
+        self.last_coverage: dict = {}
 
     def segment_objects(
         self,
@@ -229,6 +246,48 @@ class GroundedSAMProvider:
             for r in rejected:
                 print(f"      - {r}")
 
+        # 4. 弥散门（统一作用于神经与规则两条产路的最终结果）：
+        #    SAM 对远山/峭壁等无边界山水元素会产出全画布碎片掩模，
+        #    合成时雾化污染（2026-09-11 山水图验收实测）。弥散层不产出。
+        diffuse_rejected = []
+        for k in list(final_masks.keys()):
+            reason = self._diffuse_check(k, final_masks[k])
+            if reason:
+                del final_masks[k]
+                diffuse_rejected.append(f"{k}（{reason}）")
+        if diffuse_rejected:
+            print(f"[GroundedSAMProvider] ⚠️  弥散门拒绝 {len(diffuse_rejected)} 个层（不产出）：")
+            for r in diffuse_rejected:
+                print(f"      - {r}")
+
+        # 5. 语义覆盖披露（配置了什么 / 实际产出什么 / 缺什么 / 为什么）——
+        #    写入 manifest.totals.semantic_coverage，消灭"配置了却静默缺层"
+        configured = [str(c.get("name") or c.get("layer_name") or "") for c in (classes or [])]
+        produced = []
+        missing, rejected_all = [], []
+        for cname in configured:
+            matched = [k for k in final_masks if k == cname or cname in k or k in cname]
+            if matched:
+                produced.append(matched[0])
+            else:
+                # 找该类被拒的原因（神经拒绝 / 弥散拒绝 / 完全无掩模）
+                why = next((r for r in diffuse_rejected if cname in r or r.split("（")[0] in cname), None)
+                if why is None:
+                    why = next((r for r in rejected if cname in r), None)
+                if why:
+                    rejected_all.append({"name": cname, "reason": why})
+                else:
+                    missing.append({"name": cname, "reason": "DINO 未命中任何区域"})
+        # 规则引擎自产、不在配置内的层（如底板/装饰检测）如实归入 produced 之外
+        extra = [k for k in final_masks if k not in produced]
+        self.last_coverage = {
+            "configured": configured,
+            "produced": produced,
+            "extra_layers": extra,
+            "rejected": rejected_all,
+            "missing": missing,
+        }
+
         return final_masks
 
     @staticmethod
@@ -258,6 +317,28 @@ class GroundedSAMProvider:
                             f"相对规则掩模放大 {expansion:.1f}x 且 IoU={iou:.3f} < {MIN_SHAPE_IOU}（疑似背景假阳性）",
                         )
         return True, ""
+
+    @staticmethod
+    def _diffuse_check(layer_name: str, mask: np.ndarray) -> Optional[str]:
+        """弥散门：内容层外接框覆盖比超限即判弥散（跨图通用规则，非 per-image 补丁）。
+
+        返回拒绝原因（None=通过）。底板/外框/折痕等天然全画布层豁免。
+        """
+        if is_bbox_exempt(layer_name):
+            return None
+        ys, xs = np.nonzero(mask > 127)
+        if len(ys) == 0:
+            return None  # 空掩模由其它门处理
+        h, w = mask.shape
+        bw = int(xs.max()) - int(xs.min()) + 1
+        bh = int(ys.max()) - int(ys.min()) + 1
+        bbox_ratio = (bw * bh) / float(w * h)
+        if bbox_ratio > MAX_BBOX_AREA_RATIO:
+            return (
+                f"外接框覆盖 {bbox_ratio:.1%} > {MAX_BBOX_AREA_RATIO:.0%}"
+                f"（bbox {bw}x{bh}，弥散掩模拒绝）"
+            )
+        return None
 
     def _infer_grounded_sam(
         self, image_bgr: np.ndarray, classes: Optional[List[Dict[str, str]]]

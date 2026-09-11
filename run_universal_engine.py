@@ -234,6 +234,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     from engine.providers.grounded_sam_provider import GroundedSAMProvider
     grounded_sam = GroundedSAMProvider(preferred_device=chosen_hw, preset_name=preset_name)
     masks_dict = grounded_sam.segment_objects(src_lr, classes=preset.get("ai_semantic_classes"))
+    # 语义覆盖披露（G5）：配置了什么/产出什么/缺什么/为什么 —— 供 manifest.totals 披露
+    semantic_coverage = getattr(grounded_sam, "last_coverage", None)
     # 品类语义白名单（G2）：规则引擎的类集合是屏风系内置的，非屏风品类若不过滤，
     # 会把假阳性层（如壁布图上的「人物/建筑」）带进产物。preset 配置了
     # rule_class_allowlist（含空数组）即启用白名单；未配置则保持旧行为不过滤。
@@ -573,6 +575,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         man.totals["ink_compliance"] = ink_stats
     if icc_info is not None:
         man.totals["color_management"] = icc_info
+    if semantic_coverage:
+        man.totals["semantic_coverage"] = semantic_coverage
 
     # PLATE 纯净性校验结果写入 manifest，供下游质检与回灌环节读取
     ok_plate, plate_msg = man.assert_plate_purity()
