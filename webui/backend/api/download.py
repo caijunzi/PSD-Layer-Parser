@@ -1,0 +1,61 @@
+"""结果下载接口。"""
+import io
+import zipfile
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
+
+# 注意：必须以模块属性方式访问（file_handler.OUTPUTS_DIR），
+# 保证测试 patch 数据目录时此处可见（import 时绑定会绕过 patch）。
+from core import file_handler
+
+router = APIRouter()
+
+# 产物文件候选（按存在性解析，兼容引擎两种命名）：
+# - both 模式：result.plate.psb / result.design.psb（加后缀）
+# - 单模式：只有 result.psb（不加后缀！），design/plate 都回退到它
+CANDIDATES = {
+    "design": ["result.design.psb", "result.psb"],
+    "plate": ["result.plate.psb", "result.psb"],
+    "manifest": ["result.manifest.json"],
+}
+
+
+@router.get("/download/{task_id}/{file_type}")
+async def download(task_id: str, file_type: str):
+    """下载处理产物。
+
+    file_type: design | plate | manifest | masks
+    """
+    out_dir = file_handler.OUTPUTS_DIR / task_id
+    if not out_dir.exists():
+        raise HTTPException(status_code=404, detail="任务产物目录不存在")
+
+    if file_type == "masks":
+        masks_dir = out_dir / "result.masks"
+        if not masks_dir.exists() or not any(masks_dir.iterdir()):
+            raise HTTPException(status_code=404, detail="掩码目录不存在或为空")
+        # 实时打包为 zip
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in masks_dir.rglob("*"):
+                if p.is_file():
+                    zf.write(p, arcname=p.relative_to(masks_dir))
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=masks.zip"},
+        )
+
+    names = CANDIDATES.get(file_type)
+    if not names:
+        raise HTTPException(status_code=400, detail="未知文件类型")
+    for fname in names:
+        p = out_dir / fname
+        if p.exists():
+            return FileResponse(
+                str(p),
+                filename=fname,
+                media_type="application/octet-stream",
+            )
+    raise HTTPException(status_code=404, detail=f"{file_type} 产物不存在")
