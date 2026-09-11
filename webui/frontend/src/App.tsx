@@ -67,6 +67,7 @@ export default function App() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null)
   const [mode, setMode] = useState<'design' | 'plate' | 'both'>('both')
   const [scale, setScale] = useState(4.0)
+  const [dpi, setDpi] = useState(150)
   const [seed, setSeed] = useState('42')
   const [profile, setProfile] = useState('robust_performance')
 
@@ -153,7 +154,7 @@ export default function App() {
           preset: selectedPreset,
           mode,
           scale: scale || null,
-          dpi: 150.0,
+          dpi: dpi > 0 ? dpi : 150,
           seed: seed ? parseInt(seed, 10) : null,
           profile,
         }),
@@ -256,7 +257,7 @@ export default function App() {
             ['3', '配置参数', ready || busy || phase === 'done' || phase === 'failed'],
             ['4', '处理与交付', phase === 'done'],
           ].map(([num, label, done], i) => (
-            <div key={num} className="flex items-center gap-2">
+            <div key={i} className="flex items-center gap-2">
               {i > 0 && <span className="text-neutral-600">→</span>}
               <span
                 className={
@@ -448,6 +449,42 @@ export default function App() {
                   onChange={(e) => setScale(parseFloat(e.target.value))}
                   className="w-full accent-blue-500"
                 />
+              </div>
+
+              <div className="mb-4">
+                <label className="mb-1.5 block text-xs text-neutral-400">
+                  <b className="text-neutral-200">输出分辨率 (DPI)</b> · {dpi} PPI · 物理宽{' '}
+                  {(dpi > 0 ? (16000 * (scale / 4) / dpi * 25.4) / 1000 : 0).toFixed(0)} mm
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={dpi}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value.replace(/[^0-9]/g, ''), 10)
+                      setDpi(Number.isNaN(v) ? 0 : Math.min(600, v))
+                    }}
+                    className="w-28 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-center font-mono text-sm outline-none focus:border-blue-500"
+                  />
+                  {[150, 300].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setDpi(v)}
+                      className={
+                        'rounded-lg border px-3 py-1.5 text-xs transition-all ' +
+                        (dpi === v
+                          ? 'border-blue-500 bg-blue-500/15 text-blue-300 font-semibold'
+                          : 'border-neutral-700 text-neutral-400 hover:text-neutral-200')
+                      }
+                    >
+                      {v === 150 ? '150 标准' : '300 精细'}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[11px] text-neutral-600">
+                  300 DPI 出产时源图有效分辨率 {dpi > 0 && uploadInfo?.dimensions ? Math.round(uploadInfo.dimensions.width / (16000 * (scale / 4) / dpi)) : '—'} PPI
+                  （4× 放大极限，如实披露）
+                </p>
               </div>
 
               <div className="mb-4">
