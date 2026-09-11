@@ -12,16 +12,18 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // 注意：必须用 127.0.0.1 显式 IPv4——uvicorn 只绑 IPv4，
+      // 而 Node 解析 localhost 可能优先 ::1 导致 proxy ECONNREFUSED
       '/api': {
-        target: 'http://localhost:8099',
+        target: 'http://127.0.0.1:8099',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8099',
+        target: 'ws://127.0.0.1:8099',
         ws: true,
       },
       '/thumbnails': {
-        target: 'http://localhost:8099',
+        target: 'http://127.0.0.1:8099',
         changeOrigin: true,
       },
     },

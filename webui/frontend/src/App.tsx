@@ -79,8 +79,20 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
 
   const [dragging, setDragging] = useState(false)
+  const [backendUp, setBackendUp] = useState<boolean | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const logBoxRef = useRef<HTMLDivElement>(null)
+
+  /* ===== 后端真实健康检查（每 5 秒） ===== */
+  useEffect(() => {
+    const check = () =>
+      fetch('/api/health')
+        .then((r) => setBackendUp(r.ok))
+        .catch(() => setBackendUp(false))
+    check()
+    const t = setInterval(check, 5000)
+    return () => clearInterval(t)
+  }, [])
 
   /* ===== 拉取 preset 列表 ===== */
   useEffect(() => {
@@ -218,10 +230,19 @@ export default function App() {
             Universal Layer Studio <span className="text-blue-400">PRO</span>
           </h1>
           <div className="ml-auto flex items-center gap-3 text-xs text-neutral-400">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 shadow shadow-emerald-500/60" />
-              后端 :8099 已连接
-            </span>
+            {backendUp === null && <span>后端检查中…</span>}
+            {backendUp === true && (
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 shadow shadow-emerald-500/60" />
+                后端已连接
+              </span>
+            )}
+            {backendUp === false && (
+              <span className="flex items-center gap-1.5 text-red-400">
+                <span className="h-2 w-2 rounded-full bg-red-500" />
+                后端离线（请启动 webui/backend）
+              </span>
+            )}
           </div>
         </div>
       </header>
