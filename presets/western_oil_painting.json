@@ -1,11 +1,81 @@
 {
     "preset_name": "western_oil_painting",
-    "description": "西洋古典油画与丙烯绘画通用预设",
+    "display_name": "西洋古典油画与丙烯绘画通用预设",
+    "description": "适用于文艺复兴至印象派各流派油画、丙烯画、蛋彩画的智能分层，支持人物/风景/静物构图",
+    "version": "2.0.0",
+
+    "output": {
+        "mode": "design",
+        "color_mode": "rgb"
+    },
+    "dpi": 150.0,
+    "bg_layer_name": "01_天空或远景地面_Sky_Distant_Ground",
     "background_mode": "sky_or_distant_ground",
-    "panel_count": null,
+    "super_res_scale": 4.0,
+    "deocclusion_radius": 11,
+    "deocclusion_extension_px": 20,
+    "max_reconstruction_ratio": 0.08,
+    "super_res_engine": "real_esrgan",
+    "tile_size": 512,
+    "tile_pad": 32,
+
     "detect_seals": false,
     "detect_calligraphy": false,
     "detect_water_ripples": false,
-    "deocclusion_radius": 11,
-    "super_res_scale": 4.0
+
+    "ai_semantic_classes": [
+        {
+            "name": "08_画框装裱边框_Gilded_Frame",
+            "prompt": "ornate gilded picture frame . decorative border .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "07_前景人物肖像_Foreground_Figures",
+            "prompt": "human figure . portrait . person . people .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "06_静物器皿道具_Still_Life_Objects",
+            "prompt": "still life objects . vase . fruit . tableware . vessels .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "05_中景建筑结构_Midground_Architecture",
+            "prompt": "building . architecture . house . church . castle .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "04_植被林木花卉_Trees_Vegetation_Flowers",
+            "prompt": "trees . vegetation . foliage . flowers . plants .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "03_中景地面道路_Midground_Terrain_Path",
+            "prompt": "ground . terrain . pathway . road . landscape .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        },
+        {
+            "name": "02_远景山峦云层_Distant_Mountains_Clouds",
+            "prompt": "distant mountains . hills . clouds . horizon .",
+            "blend_mode": "NORMAL",
+            "opacity": 255
+        }
+    ],
+
+    "layer_semantics": {
+        "name_mapping": {},
+        "layer_attributes": []
+    },
+
+    "plate_operators": {
+        "contour_protection": { "enabled": false },
+        "micro_holes": { "enabled": false },
+        "trapping": { "enabled": false }
+    }
 }
