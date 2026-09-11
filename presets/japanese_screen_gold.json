@@ -5,8 +5,12 @@
         {"name": "08_芦雁群禽_Geese_Flock", "prompt": "wild goose . flock of birds . flying geese ."},
         {"name": "07_高士侍童人物_Figures_Scholar_Attendant", "prompt": "scholar . person . attendant . human figure ."},
         {"name": "06_水榭草堂建筑_Architecture_Pavilion", "prompt": "pavilion . hut . thatched cottage . architecture ."},
+        {"name": "05B_中景渚上水木_Midground_Water_Trees", "prompt": "trees on shore . willow . trees by the water ."},
         {"name": "05A_前景寒林枯木_Foreground_Barren_Trees", "prompt": "barren trees . pine trees . winter branches ."},
-        {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "prompt": "dark cliff . mountain rock . shoreline rocks ."},
+        {"name": "04D_远山淡墨晴岚_Distant_Soft_Mountain", "prompt": "distant soft mountain . faint ink hills . misty distant mountains ."},
+        {"name": "04C_湖心独立孤石_Solitary_Water_Rock", "prompt": "solitary rock in water . small rock island ."},
+        {"name": "04B_中景平渚矶岸_Midground_Shorelines", "prompt": "shoreline . sandy bank . water edge ."},
+        {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "prompt": "dark cliff . mountain rock . rocky hill . dark mountainside ."},
         {"name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo", "prompt": "red stamp . cinnabar seal . square seal ."},
         {"name": "09B_题跋落款墨书_Calligraphy_Inscription", "prompt": "ink calligraphy . signature inscription . vertical chinese characters ."}
     ],
@@ -15,6 +19,18 @@
     },
     "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
     "plate_inpaint_method": "telea_ns",
+    "density_refine": {
+        "enabled": true,
+        "gold_percentile": 88,
+        "sigma": 4.0,
+        "default_floor": 0.12,
+        "close_kernel": 9,
+        "open_kernel": 3,
+        "classes": {
+            "04A_前景墨岩峭壁_Foreground_Dark_Cliffs": {"floor": 0.12}
+        },
+        "note": "密度精修通道（docs/DENSITY_BAND_HYBRID_DESIGN.md §9）：弥散门拒绝的层若列入 classes，用墨密度场精修后再过弥散门。04A 已实证（bbox 74.4%→16.4%）；04D/05A 原型不可行，暂不启用"
+    },
     "icc_path": "profiles/CoatedFOGRA39.icc",
     "icc_note": "Windows 系统色库的 Coated FOGRA39 (ISO 12647-2:2004)，开发验证用；系统库无 Fogra39L 版，生产交付需替换官方 ISOcoated_v2_300_eci.icc 并更新此路径",
     "print_condition": "eci_coated_practice",

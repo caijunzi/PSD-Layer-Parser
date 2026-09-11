@@ -193,6 +193,28 @@ class GroundedSAMProvider:
         self.backend = "fallback_rule_based"
         self.last_coverage: dict = {}
 
+    def _load_preset_config(self) -> dict:
+        """按 preset_name 加载 preset 配置（缓存）。"""
+        if getattr(self, "_preset_cfg", None) is not None:
+            return self._preset_cfg
+        try:
+            from engine.schemas.presets import load_preset
+            self._preset_cfg = load_preset(self.preset_name) or {}
+        except Exception:
+            self._preset_cfg = {}
+        return self._preset_cfg
+
+    def _density_refine_config(self) -> dict:
+        """读 preset.density_refine 配置（未配置返回 disabled 空配置）。"""
+        cfg = self._load_preset_config().get("density_refine")
+        if not isinstance(cfg, dict):
+            return {"enabled": False, "classes": {}}
+        out = {"enabled": bool(cfg.get("enabled")), "classes": cfg.get("classes") or {}}
+        for k in ("default_floor", "sigma", "gold_percentile", "close_kernel", "open_kernel"):
+            if k in cfg:
+                out[k] = cfg[k]
+        return out
+
     def segment_objects(
         self,
         image_bgr: np.ndarray,
@@ -262,17 +284,60 @@ class GroundedSAMProvider:
             for r in diffuse_rejected:
                 print(f"      - {r}")
 
-        # 5. 语义覆盖披露（配置了什么 / 实际产出什么 / 缺什么 / 为什么）——
+        # 5. 密度精修通道（v1.0，2026-09-11 实证：04A 峭壁 bbox 74.4%→16.4%）：
+        #    preset.density_refine.classes 中列出的弥散被拒类，用墨密度场精修
+        #    （refined = mask ∩ D>floor + 形态学），精修后再过弥散门，通过则产出。
+        #    未列入精修配置的弥散层维持拒绝（04D/05A 已知不可行，见设计文档 §9.3）。
+        refine_cfg = self._density_refine_config()
+        refine_classes = (refine_cfg or {}).get("classes") or {}
+        recovered = []
+        if refine_cfg.get("enabled") and refine_classes and self.rejected_masks:
+            from engine.core.density_field import ink_density, refine_mask
+            D = ink_density(
+                image_bgr,
+                gold_percentile=float(refine_cfg.get("gold_percentile", 88)),
+                sigma=float(refine_cfg.get("sigma", 4.0)),
+            )
+            for k, raw in list(self.rejected_masks.items()):
+                cls_cfg = refine_classes.get(k)
+                if not cls_cfg:
+                    continue
+                refined = refine_mask(
+                    raw, D,
+                    floor=float(cls_cfg.get("floor", refine_cfg.get("default_floor", 0.12))),
+                    close_kernel=int(cls_cfg.get("close_kernel", refine_cfg.get("close_kernel", 9))),
+                    open_kernel=int(cls_cfg.get("open_kernel", refine_cfg.get("open_kernel", 3))),
+                )
+                reason = self._diffuse_check(k, refined)
+                if reason:
+                    rejected.append(f"{k}（密度精修后仍弥散：{reason}）")
+                    continue
+                if np.count_nonzero(refined > 127) == 0:
+                    rejected.append(f"{k}（密度精修后为空掩模）")
+                    continue
+                final_masks[k] = refined
+                recovered.append(k)
+                print(f"[GroundedSAMProvider] 密度精修恢复层: {k}")
+        else:
+            recovered = []
+
+        # 6. 语义覆盖披露（配置了什么 / 实际产出什么 / 缺什么 / 为什么）——
         #    写入 manifest.totals.semantic_coverage，消灭"配置了却静默缺层"
         configured = [str(c.get("name") or c.get("layer_name") or "") for c in (classes or [])]
         produced = []
+        produced_details = []
         missing, rejected_all = [], []
+        refine_set = {r for r in recovered}
         for cname in configured:
             matched = [k for k in final_masks if k == cname or cname in k or k in cname]
             if matched:
-                produced.append(matched[0])
+                mkey = matched[0]
+                produced.append(mkey)
+                produced_details.append({
+                    "name": mkey,
+                    "source": "density_refined" if (mkey in refine_set or cname in refine_set) else "sam",
+                })
             else:
-                # 找该类被拒的原因（神经拒绝 / 弥散拒绝 / 完全无掩模）
                 why = next((r for r in diffuse_rejected if cname in r or r.split("（")[0] in cname), None)
                 if why is None:
                     why = next((r for r in rejected if cname in r), None)
@@ -280,11 +345,11 @@ class GroundedSAMProvider:
                     rejected_all.append({"name": cname, "reason": why})
                 else:
                     missing.append({"name": cname, "reason": "DINO 未命中任何区域"})
-        # 规则引擎自产、不在配置内的层（如底板/装饰检测）如实归入 produced 之外
         extra = [k for k in final_masks if k not in produced]
         self.last_coverage = {
             "configured": configured,
             "produced": produced,
+            "produced_details": produced_details,
             "extra_layers": extra,
             "rejected": rejected_all,
             "missing": missing,
