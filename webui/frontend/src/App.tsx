@@ -287,7 +287,7 @@ export default function App() {
               id="file-input"
               type="file"
               accept=".jpg,.jpeg,.png,.psd,.psb"
-              className="hidden"
+              className="sr-only"
               onChange={(e) => {
                 const f = e.target.files?.[0]
                 if (f) void doUpload(f)
