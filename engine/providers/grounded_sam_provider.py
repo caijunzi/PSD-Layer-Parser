@@ -62,6 +62,9 @@ DEFAULT_TEXT_THRESHOLD = 0.25
 # 单框面积上限（占全画布），超过视为"把背景框进来了"
 MAX_BOX_AREA_RATIO = 0.08
 
+# 实例层（name_NN）面积预算放宽倍数：单个体不应按整类面积衡量
+INSTANCE_BUDGET_FACTOR = 3.0
+
 # 弥散掩模门（2026-09-11 山水图验收引入）：内容层掩模的外接框覆盖比超过此值
 # 即判定"弥散"（SAM 对远山/峭壁等无边界山水元素天然产出全画布碎片掩模，
 # 合成时雾化污染右半屏）。豁免表覆盖天然全画布的装饰/底板层。
@@ -257,6 +260,13 @@ class GroundedSAMProvider:
                 else:
                     rejected.append(f"{k}（{reason}）")
 
+        # 3.5 实例拆分一致性：启用 instance_split 的类不保留合并层，
+        #     否则规则 fallback 的合并掩模会与单实例层重复占用同一内容。
+        split_bases = {c.get("name") for c in (classes or []) if c.get("instance_split")}
+        for k in list(final_masks.keys()):
+            if k in split_bases:
+                del final_masks[k]
+
         if accepted:
             self.backend = "grounded_sam2_neural_dynamic"
             print(f"[GroundedSAMProvider] 神经解耦图层已置入: {accepted}")
@@ -291,6 +301,7 @@ class GroundedSAMProvider:
         refine_cfg = self._density_refine_config()
         refine_classes = (refine_cfg or {}).get("classes") or {}
         recovered = []
+        D = None
         if refine_cfg.get("enabled") and refine_classes and self.rejected_masks:
             from engine.core.density_field import ink_density, refine_mask
             D = ink_density(
@@ -321,6 +332,46 @@ class GroundedSAMProvider:
         else:
             recovered = []
 
+        # 5.5 密度带独立通道（DINO 完全未命中的纹理/晕染类）：
+        #     preset.density_band_classes 配置 (region + 密度区间) 直接产层，
+        #     产物过弥散门；source 标记 density_band。
+        band_cfg = self._load_preset_config().get("density_band_classes") or []
+        band_produced = []
+        for item in band_cfg:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            # 语义路径已产出该类 → 不覆盖（SAM/精修优先于密度带）
+            if any(item["name"] == k or item["name"] in k for k in final_masks):
+                continue
+            try:
+                from engine.core.density_field import band_mask as _band_mask, ink_density as _ink_density
+                if D is None:
+                    D = _ink_density(
+                        image_bgr,
+                        gold_percentile=float(item.get("gold_percentile", 88)),
+                        sigma=float(item.get("sigma", 4.0)),
+                    )
+                bm = _band_mask(
+                    D,
+                    float(item.get("density_min", 0.05)),
+                    float(item.get("density_max", 0.20)),
+                    tuple(item["region"]) if item.get("region") else None,
+                    close_kernel=int(item.get("close_kernel", 9)),
+                    open_kernel=int(item.get("open_kernel", 3)),
+                    min_blob_area=int(item.get("min_blob_area_px", 0)),
+                )
+                if np.count_nonzero(bm > 127) == 0:
+                    continue
+                reason = self._diffuse_check(item["name"], bm)
+                if reason:
+                    rejected.append(f"{item['name']}（密度带产出仍弥散：{reason}）")
+                    continue
+                final_masks[item["name"]] = bm
+                band_produced.append(item["name"])
+                print(f"[GroundedSAMProvider] 密度带产出层: {item['name']}")
+            except Exception as e:
+                print(f"[GroundedSAMProvider] 密度带通道异常 {item.get('name')}: {e}")
+
         # 6. 语义覆盖披露（配置了什么 / 实际产出什么 / 缺什么 / 为什么）——
         #    写入 manifest.totals.semantic_coverage，消灭"配置了却静默缺层"
         configured = [str(c.get("name") or c.get("layer_name") or "") for c in (classes or [])]
@@ -328,15 +379,19 @@ class GroundedSAMProvider:
         produced_details = []
         missing, rejected_all = [], []
         refine_set = {r for r in recovered}
+        band_set = set(band_produced)
         for cname in configured:
             matched = [k for k in final_masks if k == cname or cname in k or k in cname]
             if matched:
                 mkey = matched[0]
                 produced.append(mkey)
-                produced_details.append({
-                    "name": mkey,
-                    "source": "density_refined" if (mkey in refine_set or cname in refine_set) else "sam",
-                })
+                if mkey in refine_set or cname in refine_set:
+                    src = "density_refined"
+                elif mkey in band_set or cname in band_set:
+                    src = "density_band"
+                else:
+                    src = "sam"
+                produced_details.append({"name": mkey, "source": src})
             else:
                 why = next((r for r in diffuse_rejected if cname in r or r.split("（")[0] in cname), None)
                 if why is None:
@@ -366,9 +421,17 @@ class GroundedSAMProvider:
             return False, "空掩模"
 
         ratio = n / total
-        budget = area_budget_for(layer_name)
+        # 实例层（name_NN）按"单个体"衡量，沿用整类预算会误杀单只雁等大个体：
+        # 放宽 INSTANCE_BUDGET_FACTOR 倍，弥散门（bbox 覆盖比）仍照常生效。
+        import re as _re
+        base = _re.sub(r"_\d{2}$", "", str(layer_name))
+        is_instance = base != str(layer_name)
+        budget = area_budget_for(base)
+        if is_instance:
+            budget *= INSTANCE_BUDGET_FACTOR
         if ratio > budget:
-            return False, f"面积 {ratio:.3%} 超出该类预算 {budget:.3%}"
+            kind = "实例" if is_instance else "类"
+            return False, f"面积 {ratio:.3%} 超出该{kind}预算 {budget:.3%}"
 
         if rule is not None:
             n_rule = int(np.count_nonzero(rule > 127))
@@ -458,7 +521,9 @@ class GroundedSAMProvider:
                     continue
 
                 layer_mask = np.zeros((h, w), dtype=np.uint8)
-                for box in boxes:
+                instances: Dict[str, np.ndarray] = {}
+                instance_split = bool(cls_info.get("instance_split"))
+                for idx, box in enumerate(boxes, start=1):
                     cx, cy, bw, bh = box.tolist()
                     x1 = max(0, int((cx - bw / 2.0) * w))
                     y1 = max(0, int((cy - bh / 2.0) * h))
@@ -472,9 +537,18 @@ class GroundedSAMProvider:
                     sam_box = np.array([x1, y1, x2, y2])
                     masks, scores, _ = self.sam_predictor.predict(box=sam_box)
                     best_mask = masks[np.argmax(scores)]
-                    layer_mask = np.maximum(layer_mask, (best_mask.astype(np.uint8) * 255))
+                    if instance_split:
+                        # 实例级拆分：每个检测框独立成层（如雁群 → 单只雁逐层）
+                        instances[f"{layer_name}_{idx:02d}"] = best_mask.astype(np.uint8) * 255
+                    else:
+                        layer_mask = np.maximum(layer_mask, (best_mask.astype(np.uint8) * 255))
 
-                if np.any(layer_mask > 0):
+                if instance_split:
+                    for iname, imask in instances.items():
+                        if np.any(imask > 0):
+                            results[iname] = imask
+                    print(f"[GroundedSAMProvider] Neural instances '{layer_name}': {len(instances)} 个实例")
+                elif np.any(layer_mask > 0):
                     results[layer_name] = layer_mask
                     print(f"[GroundedSAMProvider] Neural segmented layer '{layer_name}': {np.sum(layer_mask > 0)} px")
             except Exception as e:

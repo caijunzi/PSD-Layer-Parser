@@ -1,112 +1,169 @@
 {
-    "preset_name": "japanese_screen_gold",
-    "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
-    "ai_semantic_classes": [
-        {"name": "08_芦雁群禽_Geese_Flock", "prompt": "wild goose . flock of birds . flying geese ."},
-        {"name": "07_高士侍童人物_Figures_Scholar_Attendant", "prompt": "scholar . person . attendant . human figure ."},
-        {"name": "06_水榭草堂建筑_Architecture_Pavilion", "prompt": "pavilion . hut . thatched cottage . architecture ."},
-        {"name": "05B_中景渚上水木_Midground_Water_Trees", "prompt": "trees on shore . willow . trees by the water ."},
-        {"name": "05A_前景寒林枯木_Foreground_Barren_Trees", "prompt": "barren trees . pine trees . winter branches ."},
-        {"name": "04D_远山淡墨晴岚_Distant_Soft_Mountain", "prompt": "distant soft mountain . faint ink hills . misty distant mountains ."},
-        {"name": "04C_湖心独立孤石_Solitary_Water_Rock", "prompt": "solitary rock in water . small rock island ."},
-        {"name": "04B_中景平渚矶岸_Midground_Shorelines", "prompt": "shoreline . sandy bank . water edge ."},
-        {"name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs", "prompt": "dark cliff . mountain rock . rocky hill . dark mountainside ."},
-        {"name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo", "prompt": "red stamp . cinnabar seal . square seal ."},
-        {"name": "09B_题跋落款墨书_Calligraphy_Inscription", "prompt": "ink calligraphy . signature inscription . vertical chinese characters ."}
-    ],
-    "output": {
-        "mode": "design"
+  "preset_name": "japanese_screen_gold",
+  "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
+  "ai_semantic_classes": [
+    {
+      "name": "08_芦雁群禽_Geese_Flock",
+      "prompt": "wild goose . flock of birds . flying geese .",
+      "instance_split": true
     },
-    "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
-    "plate_inpaint_method": "telea_ns",
-    "density_refine": {
-        "enabled": true,
-        "gold_percentile": 88,
-        "sigma": 4.0,
-        "default_floor": 0.12,
-        "close_kernel": 9,
-        "open_kernel": 3,
-        "classes": {
-            "04A_前景墨岩峭壁_Foreground_Dark_Cliffs": {"floor": 0.12}
-        },
-        "note": "密度精修通道（docs/DENSITY_BAND_HYBRID_DESIGN.md §9）：弥散门拒绝的层若列入 classes，用墨密度场精修后再过弥散门。04A 已实证（bbox 74.4%→16.4%）；04D/05A 原型不可行，暂不启用"
+    {
+      "name": "07_高士侍童人物_Figures_Scholar_Attendant",
+      "prompt": "scholar . person . attendant . human figure ."
     },
-    "icc_path": "profiles/CoatedFOGRA39.icc",
-    "icc_note": "Windows 系统色库的 Coated FOGRA39 (ISO 12647-2:2004)，开发验证用；系统库无 Fogra39L 版，生产交付需替换官方 ISOcoated_v2_300_eci.icc 并更新此路径",
-    "print_condition": "eci_coated_practice",
-    "plate_operators": {
-        "contour_protection": {
-            "enabled": true
-        },
-        "micro_holes": {
-            "enabled": false
-        },
-        "trapping": {
-            "enabled": false
-        }
+    {
+      "name": "06_水榭草堂建筑_Architecture_Pavilion",
+      "prompt": "pavilion . hut . thatched cottage . architecture ."
     },
-    "background_mode": "paper_or_gold_screen",
-    "panel_count": 6,
-    "dpi": 150.0,
-    "super_res_scale": 4.0,
-    "target_w": 16000,
-    "target_h": 7808,
-    "progressive_stages": [
-        1.5,
-        2.0,
-        4.0
-    ],
-    "deocclusion_radius": 7,
-    "deocclusion_extension_px": 20,
-    "detect_seals": true,
-    "detect_calligraphy": true,
-    "detect_water_ripples": true,
-    "layer_semantics": {
-        "name_mapping": {
-            "01_base_gold_ground": "02_纯净金箔大底板_Gold_Base_Clean",
-            "02_gold_base_clean": "02_纯净金箔大底板_Gold_Base_Clean",
-            "02_water_ripples": "03_水波微澜墨纹_Water_Ripples",
-            "03_water_ripples": "03_水波微澜墨纹_Water_Ripples",
-            "04c_solitary_water_rock": "04C_湖心独立孤石_Solitary_Water_Rock",
-            "04b_midground_shorelines": "04B_中景平渚矶岸_Midground_Shorelines",
-            "04d_distant_soft_mountain": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
-            "04a_foreground_dark_cliffs": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
-            "04_mountains_cliffs_shorelines": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
-            "03_distant_mountains": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
-            "05b_midground_water_trees": "05B_中景渚上水木_Midground_Water_Trees",
-            "05a_foreground_barren_trees": "05A_前景寒林枯木_Foreground_Barren_Trees",
-            "05_trees_vegetation": "05A_前景寒林枯木_Foreground_Barren_Trees",
-            "06_architecture_pavilion": "06_水榭草堂建筑_Architecture_Pavilion",
-            "07_figures_scholar_attendant": "07_高士侍童人物_Figures_Scholar_Attendant",
-            "07_figures_scholar_attendants": "07_高士侍童人物_Figures_Scholar_Attendant",
-            "08_fauna_geese": "08_芦雁群禽_Geese_Flock",
-            "08_geese_flock": "08_芦雁群禽_Geese_Flock",
-            "09b_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
-            "09_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
-            "09a_seal_nagasawa_gyo": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
-            "10_cinnabar_seal": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
-            "10b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
-            "11b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
-            "10a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
-            "11a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame"
-        },
-        "layer_attributes": [
-            {
-                "match": [
-                    "seam",
-                    "fold",
-                    "折痕",
-                    "折缝"
-                ],
-                "fixed_color": [
-                    25,
-                    20,
-                    15
-                ],
-                "blend_mode": "MULTIPLY",
-                "opacity": 190,
-                "comment": "屏风物理折痕：正片叠底 + 古雅基色"
-            }
-        ]
+    {
+      "name": "05B_中景渚上水木_Midground_Water_Trees",
+      "prompt": "tree on the shore . small tree by water . bare tree near river ."
+    },
+    {
+      "name": "05A_前景寒林枯木_Foreground_Barren_Trees",
+      "prompt": "barren trees . pine trees . winter branches ."
+    },
+    {
+      "name": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
+      "prompt": "faint distant mountain . pale misty hill . far mountain silhouette ."
+    },
+    {
+      "name": "04C_湖心独立孤石_Solitary_Water_Rock",
+      "prompt": "solitary rock in water . small rock island ."
+    },
+    {
+      "name": "04B_中景平渚矶岸_Midground_Shorelines",
+      "prompt": "riverbank . sand bar . shore with rocks . water edge stones ."
+    },
+    {
+      "name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
+      "prompt": "dark cliff . mountain rock . rocky hill . dark mountainside ."
+    },
+    {
+      "name": "03_水波微澜墨纹_Water_Ripples",
+      "prompt": "water ripples . gentle waves . water surface . river water ."
+    },
+    {
+      "name": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
+      "prompt": "red stamp . cinnabar seal . square seal ."
+    },
+    {
+      "name": "09B_题跋落款墨书_Calligraphy_Inscription",
+      "prompt": "ink calligraphy . signature inscription . vertical chinese characters ."
     }
+  ],
+  "output": {
+    "mode": "design"
+  },
+  "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
+  "density_band_classes": [
+    {
+      "name": "03_水波微澜墨纹_Water_Ripples",
+      "density_min": 0.05,
+      "density_max": 0.18,
+      "region": [
+        0.05,
+        0.5,
+        0.62,
+        0.95
+      ],
+      "region_note": "画面左下为江水区（雁群下方的水域）",
+      "close_kernel": 9,
+      "open_kernel": 3,
+      "min_blob_area_px": 600
+    }
+  ],
+  "plate_inpaint_method": "telea_ns",
+  "density_refine": {
+    "enabled": true,
+    "gold_percentile": 88,
+    "sigma": 4.0,
+    "default_floor": 0.12,
+    "close_kernel": 9,
+    "open_kernel": 3,
+    "classes": {
+      "04A_前景墨岩峭壁_Foreground_Dark_Cliffs": {
+        "floor": 0.12
+      }
+    },
+    "note": "密度精修通道（docs/DENSITY_BAND_HYBRID_DESIGN.md §9）：弥散门拒绝的层若列入 classes，用墨密度场精修后再过弥散门。04A 已实证（bbox 74.4%→16.4%）；04D/05A 原型不可行，暂不启用"
+  },
+  "icc_path": "profiles/CoatedFOGRA39.icc",
+  "icc_note": "Windows 系统色库的 Coated FOGRA39 (ISO 12647-2:2004)，开发验证用；系统库无 Fogra39L 版，生产交付需替换官方 ISOcoated_v2_300_eci.icc 并更新此路径",
+  "print_condition": "eci_coated_practice",
+  "plate_operators": {
+    "contour_protection": {
+      "enabled": true
+    },
+    "micro_holes": {
+      "enabled": false
+    },
+    "trapping": {
+      "enabled": false
+    }
+  },
+  "background_mode": "paper_or_gold_screen",
+  "panel_count": 6,
+  "dpi": 150.0,
+  "super_res_scale": 4.0,
+  "target_w": 16000,
+  "target_h": 7808,
+  "progressive_stages": [
+    1.5,
+    2.0,
+    4.0
+  ],
+  "deocclusion_radius": 7,
+  "deocclusion_extension_px": 20,
+  "detect_seals": true,
+  "detect_calligraphy": true,
+  "detect_water_ripples": true,
+  "layer_semantics": {
+    "name_mapping": {
+      "01_base_gold_ground": "02_纯净金箔大底板_Gold_Base_Clean",
+      "02_gold_base_clean": "02_纯净金箔大底板_Gold_Base_Clean",
+      "02_water_ripples": "03_水波微澜墨纹_Water_Ripples",
+      "03_water_ripples": "03_水波微澜墨纹_Water_Ripples",
+      "04c_solitary_water_rock": "04C_湖心独立孤石_Solitary_Water_Rock",
+      "04b_midground_shorelines": "04B_中景平渚矶岸_Midground_Shorelines",
+      "04d_distant_soft_mountain": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
+      "04a_foreground_dark_cliffs": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
+      "04_mountains_cliffs_shorelines": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",
+      "03_distant_mountains": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
+      "05b_midground_water_trees": "05B_中景渚上水木_Midground_Water_Trees",
+      "05a_foreground_barren_trees": "05A_前景寒林枯木_Foreground_Barren_Trees",
+      "05_trees_vegetation": "05A_前景寒林枯木_Foreground_Barren_Trees",
+      "06_architecture_pavilion": "06_水榭草堂建筑_Architecture_Pavilion",
+      "07_figures_scholar_attendant": "07_高士侍童人物_Figures_Scholar_Attendant",
+      "07_figures_scholar_attendants": "07_高士侍童人物_Figures_Scholar_Attendant",
+      "08_fauna_geese": "08_芦雁群禽_Geese_Flock",
+      "08_geese_flock": "08_芦雁群禽_Geese_Flock",
+      "09b_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
+      "09_calligraphy_inscription": "09B_题跋落款墨书_Calligraphy_Inscription",
+      "09a_seal_nagasawa_gyo": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
+      "10_cinnabar_seal": "09A_长泽芦雪朱红印章_Seal_Nagasawa_Gyo",
+      "10b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
+      "11b_panel_fold_seams": "10B_屏风折痕折缝_Panel_Fold_Seams",
+      "10a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame",
+      "11a_brocade_outer_frame": "10A_外框与织锦绫边_Brocade_Outer_Frame"
+    },
+    "layer_attributes": [
+      {
+        "match": [
+          "seam",
+          "fold",
+          "折痕",
+          "折缝"
+        ],
+        "fixed_color": [
+          25,
+          20,
+          15
+        ],
+        "blend_mode": "MULTIPLY",
+        "opacity": 190,
+        "comment": "屏风物理折痕：正片叠底 + 古雅基色"
+      }
+    ]
+  }
 }

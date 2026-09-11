@@ -90,6 +90,38 @@ def mask_stats(mask: np.ndarray) -> dict:
     }
 
 
+def band_mask(
+    density: np.ndarray,
+    dmin: float,
+    dmax: float,
+    region: Optional[tuple] = None,
+    close_kernel: int = DEFAULT_CLOSE_KERNEL,
+    open_kernel: int = DEFAULT_OPEN_KERNEL,
+    min_blob_area: int = 0,
+) -> np.ndarray:
+    """密度带 × 区域先验 → 独立层掩模（用于 DINO 完全未命中的纹理/晕染类）。
+
+    region 为归一化 (x0, y0, x1, y1)；None 表示全画幅。
+    """
+    mask = ((density >= dmin) & (density <= dmax)).astype(np.uint8) * 255
+    if region:
+        h, w = mask.shape
+        x0, y0, x1, y1 = int(region[0] * w), int(region[1] * h), int(region[2] * w), int(region[3] * h)
+        frame = np.zeros_like(mask)
+        frame[max(0, y0):min(h, y1), max(0, x0):min(w, x1)] = 255
+        mask = cv2.bitwise_and(mask, frame)
+    if close_kernel > 1:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((close_kernel, close_kernel), np.uint8))
+    if open_kernel > 1:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((open_kernel, open_kernel), np.uint8))
+    if min_blob_area > 0:
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] < min_blob_area:
+                mask[labels == i] = 0
+    return mask
+
+
 def diffuse_reason_bbox_ratio(mask: np.ndarray) -> Optional[float]:
     """返回外接框覆盖比（供门限判断）。"""
     return mask_stats(mask)["bbox_ratio"]

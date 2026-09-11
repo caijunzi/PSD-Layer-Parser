@@ -76,6 +76,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogLine[]>([])
   const [taskId, setTaskId] = useState<string | null>(null)
   const [outputs, setOutputs] = useState<OutputFile[]>([])
+  const [manifest, setManifest] = useState<Record<string, any>>({})
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
@@ -184,6 +185,7 @@ export default function App() {
           setProgress(100)
           setStage('完成')
           setOutputs(msg.output_files ?? [])
+          setManifest(msg.manifest ?? {})
           setElapsed(msg.elapsed_time ?? 0)
           setPhase('done')
           ws.close()
@@ -631,6 +633,68 @@ export default function App() {
                 </a>
               ))}
             </div>
+
+            {/* 分层报告：semantic_coverage（配置了什么/产出什么/什么被拒/为什么） */}
+            {(() => {
+              const sc = (manifest as any)?.totals?.semantic_coverage
+              if (!sc) return null
+              const SRC_LABEL: Record<string, string> = {
+                sam: 'SAM 语义', density_refined: '密度精修', density_band: '密度带',
+              }
+              const SRC_COLOR: Record<string, string> = {
+                sam: 'border-blue-500/40 bg-blue-500/10 text-blue-300',
+                density_refined: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+                density_band: 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300',
+              }
+              return (
+                <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5">
+                  <h4 className="mb-3 text-sm font-semibold text-neutral-200">
+                    分层报告 · 语义覆盖披露
+                  </h4>
+                  <div className="mb-3 text-xs text-neutral-400">
+                    配置 {sc.configured?.length ?? 0} 类 · 产出{' '}
+                    <b className="text-emerald-400">{sc.produced?.length ?? 0}</b> 层 · 被拒{' '}
+                    <b className="text-red-400">{sc.rejected?.length ?? 0}</b> · 未命中{' '}
+                    <b className="text-neutral-300">{sc.missing?.length ?? 0}</b>
+                  </div>
+                  <div className="space-y-1.5">
+                    {(sc.produced_details ?? sc.produced ?? []).map((d: any, i: number) => {
+                      const name = typeof d === 'string' ? d : d.name
+                      const src = typeof d === 'string' ? 'sam' : d.source
+                      return (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <span className="text-emerald-500">✓</span>
+                          <span className="flex-1 truncate text-neutral-300">{name}</span>
+                          <span className={`rounded border px-2 py-0.5 text-[10px] ${SRC_COLOR[src] ?? ''}`}>
+                            {SRC_LABEL[src] ?? src}
+                          </span>
+                        </div>
+                      )
+                    })}
+                    {(sc.rejected ?? []).map((r: any, i: number) => (
+                      <div key={`r${i}`} className="flex items-start gap-2 text-xs">
+                        <span className="text-red-500">✕</span>
+                        <span className="flex-1 text-neutral-400">
+                          <b className="text-neutral-300">{r.name}</b>
+                          <span className="block text-[11px] text-neutral-600">{r.reason}</span>
+                        </span>
+                      </div>
+                    ))}
+                    {(sc.missing ?? []).map((m: any, i: number) => (
+                      <div key={`m${i}`} className="flex items-center gap-2 text-xs">
+                        <span className="text-neutral-600">−</span>
+                        <span className="flex-1 truncate text-neutral-500">{m.name}</span>
+                        <span className="text-[10px] text-neutral-600">{m.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-[11px] text-neutral-600">
+                    被拒/未命中的层内容保留在底板上（合成不损失），仅缺独立可编辑图层——
+                    完整记录见 manifest.json
+                  </p>
+                </div>
+              )
+            })()}
 
             <div className="flex justify-end">
               <button
