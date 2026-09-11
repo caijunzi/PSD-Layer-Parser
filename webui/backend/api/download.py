@@ -10,13 +10,15 @@ from core import file_handler
 
 router = APIRouter()
 
-# 产物文件候选（按存在性解析，兼容引擎两种命名）：
-# - both 模式：result.plate.psb / result.design.psb（加后缀）
+# 产物文件候选（按存在性解析，兼容引擎多种命名）：
+# - both 模式：result.plate.psb / result.design.psb（加后缀）；
+#   manifest 每线一份 result.{plate,design}.manifest.json（plate 版=印前审计凭据优先）
 # - 单模式：只有 result.psb（不加后缀！），design/plate 都回退到它
 CANDIDATES = {
     "design": ["result.design.psb", "result.psb"],
     "plate": ["result.plate.psb", "result.psb"],
-    "manifest": ["result.manifest.json"],
+    "manifest": ["result.plate.manifest.json", "result.design.manifest.json",
+                 "result.manifest.json"],
 }
 
 
@@ -31,8 +33,14 @@ async def download(task_id: str, file_type: str):
         raise HTTPException(status_code=404, detail="任务产物目录不存在")
 
     if file_type == "masks":
-        masks_dir = out_dir / "result.masks"
-        if not masks_dir.exists() or not any(masks_dir.iterdir()):
+        # both 模式每线一份 result.{plate,design}.masks/；单模式 result.masks/
+        masks_dir = None
+        for d in ("result.plate.masks", "result.design.masks", "result.masks"):
+            cand = out_dir / d
+            if cand.exists() and any(cand.iterdir()):
+                masks_dir = cand
+                break
+        if masks_dir is None:
             raise HTTPException(status_code=404, detail="掩码目录不存在或为空")
         # 实时打包为 zip
         buf = io.BytesIO()

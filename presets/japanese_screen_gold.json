@@ -15,7 +15,8 @@
     },
     "bg_layer_name": "02_纯净金箔大底板_Gold_Base_Clean",
     "plate_inpaint_method": "telea_ns",
-    "icc_path": "profiles/Coated_FOGRA39L.icc",
+    "icc_path": "profiles/CoatedFOGRA39.icc",
+    "icc_note": "Windows 系统色库的 Coated FOGRA39 (ISO 12647-2:2004)，开发验证用；系统库无 Fogra39L 版，生产交付需替换官方 ISOcoated_v2_300_eci.icc 并更新此路径",
     "print_condition": "eci_coated_practice",
     "plate_operators": {
         "contour_protection": {

@@ -158,31 +158,53 @@ class TaskManager:
 
             # 实时读 stdout
             assert proc.stdout is not None
-            async for raw in proc.stdout:
-                line = raw.decode("utf-8", errors="replace").rstrip()
-                if not line:
-                    continue
-                ts = datetime.now().isoformat()
-                task["logs"].append({"timestamp": ts, "message": line})
 
-                stage = _match_stage(line)
-                elapsed = asyncio.get_event_loop().time() - start
-                # 进度估算：时间比例，封顶 95%
-                progress = min(95, int(elapsed / max(1, estimated) * 100))
-                task["progress"] = progress
-                if stage:
-                    task["stage"] = stage
+            # 心跳任务：引擎长计算阶段（如 CMYK 分色/1.5GB 写盘）可能数分钟
+            # 无 stdout 行，若无心跳前端会误判卡死（本次全流程验证实测 5 分钟静默）
+            async def heartbeat():
+                while True:
+                    await asyncio.sleep(10)
+                    elapsed = asyncio.get_event_loop().time() - start
+                    prog = min(95, int(elapsed / max(1, estimated) * 100))
+                    await ws_manager.broadcast(task_id, {
+                        "type": "progress", "task_id": task_id,
+                        "stage": task.get("stage") or "计算中",
+                        "progress": max(task.get("progress", 0), prog),
+                        "message": f"…引擎计算中（长阶段无逐行日志）已 {elapsed:.0f}s",
+                        "elapsed": round(elapsed, 1),
+                        "heartbeat": True,
+                    })
 
-                await ws_manager.broadcast(task_id, {
-                    "type": "progress", "task_id": task_id,
-                    "stage": stage or task.get("stage") or "处理中",
-                    "progress": progress,
-                    "message": line,
-                    "elapsed": round(elapsed, 1),
-                    "timestamp": ts,
-                })
+            hb_task = asyncio.create_task(heartbeat())
+            try:
+                async for raw in proc.stdout:
+                    line = raw.decode("utf-8", errors="replace").rstrip()
+                    if not line:
+                        continue
+                    ts = datetime.now().isoformat()
+                    task["logs"].append({"timestamp": ts, "message": line})
 
-            await proc.wait()
+                    stage = _match_stage(line)
+                    elapsed = asyncio.get_event_loop().time() - start
+                    # 进度估算：时间比例，封顶 95%
+                    progress = min(95, int(elapsed / max(1, estimated) * 100))
+                    task["progress"] = progress
+                    if stage:
+                        task["stage"] = stage
+
+                    await ws_manager.broadcast(task_id, {
+                        "type": "progress", "task_id": task_id,
+                        "stage": stage or task.get("stage") or "处理中",
+                        "progress": progress,
+                        "message": line,
+                        "elapsed": round(elapsed, 1),
+                        "timestamp": ts,
+                    })
+
+                await proc.wait()
+            finally:
+                hb_task.cancel()
+
             self._current_process = None
 
             elapsed_total = round(asyncio.get_event_loop().time() - start, 1)
@@ -233,17 +255,25 @@ class TaskManager:
     def _collect_outputs(self, out_dir: Path, task_id: str, mode: str = "both") -> list[dict]:
         """收集产物文件，构造下载 URL 列表。
 
-        引擎命名规则（run_universal_engine.py）：
+        引擎命名规则（run_universal_engine.py 实测）：
         - both 模式：result.plate.psb + result.design.psb（加后缀防覆盖）
         - 单模式：产物就是 --output 本身，即 result.psb（不加后缀！）
-        - manifest：result.manifest.json（带 stem 前缀）
+        - manifest：both 模式每线一份 result.{plate,design}.manifest.json；
+          单模式为 result.{mode}.manifest.json 或旧版 result.manifest.json
+        - masks：both 模式 result.{plate,design}.masks/；单模式 result.masks/
         """
         files = []
         if mode == "both":
             candidates = [("result.plate.psb", "plate"), ("result.design.psb", "design")]
+            manifests = ["result.plate.manifest.json", "result.design.manifest.json"]
+            masks_dir = out_dir / "result.plate.masks"
+            masks_tag = "plate"
         else:
             # 单模式：result.psb 即该模式产物
             candidates = [("result.psb", mode)]
+            manifests = [f"result.{mode}.manifest.json", "result.manifest.json"]
+            masks_dir = out_dir / "result.masks"
+            masks_tag = mode
         for fname, ftype in candidates:
             p = out_dir / fname
             if p.exists():
@@ -253,34 +283,38 @@ class TaskManager:
                     "size": p.stat().st_size,
                     "download_url": f"/api/download/{task_id}/{ftype}",
                 })
-        # manifest（引擎实际命名带 stem 前缀）
-        mf = out_dir / "result.manifest.json"
-        if mf.exists():
-            files.append({
-                "type": "manifest",
-                "filename": "result.manifest.json",
-                "size": mf.stat().st_size,
-                "download_url": f"/api/download/{task_id}/manifest",
-            })
+        # manifest（按候选顺序取第一份存在的；both 模式优先 plate 版=印前审计凭据）
+        for mf_name in manifests:
+            mf = out_dir / mf_name
+            if mf.exists():
+                files.append({
+                    "type": "manifest",
+                    "filename": mf_name,
+                    "size": mf.stat().st_size,
+                    "download_url": f"/api/download/{task_id}/manifest",
+                })
+                break
         # 掩码目录打包为 zip（前端按需下载）
-        masks_dir = out_dir / "result.masks"
         if masks_dir.exists() and any(masks_dir.iterdir()):
             files.append({
                 "type": "masks",
-                "filename": "masks.zip",
+                "filename": f"masks_{masks_tag}.zip",
                 "size": -1,
                 "download_url": f"/api/download/{task_id}/masks",
             })
         return files
 
     def _read_manifest(self, out_dir: Path) -> dict:
-        p = out_dir / "manifest.json"
-        if not p.exists():
-            return {}
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        """读 manifest（both 模式优先 plate 版审计凭据）。"""
+        for name in ("result.plate.manifest.json", "result.design.manifest.json",
+                     "result.manifest.json", "manifest.json"):
+            p = out_dir / name
+            if p.exists():
+                try:
+                    return json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+        return {}
 
 
 # 模块级单例

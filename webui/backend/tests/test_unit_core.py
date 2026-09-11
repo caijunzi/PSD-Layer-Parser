@@ -82,23 +82,28 @@ class TestTaskManagerUnit(BaseWebUITest):
 
     def test_collect_outputs(self):
         out_dir = Path(self._tmp.name) / "outputs" / "t_out"
-        (out_dir / "result.masks").mkdir(parents=True, exist_ok=True)
+        (out_dir / "result.plate.masks").mkdir(parents=True, exist_ok=True)
+        (out_dir / "result.plate.masks" / "a.png").write_bytes(b"m")
         (out_dir / "result.design.psb").write_bytes(b"d")
         (out_dir / "result.plate.psb").write_bytes(b"p")
-        (out_dir / "result.manifest.json").write_text("{}", encoding="utf-8")
+        (out_dir / "result.plate.manifest.json").write_text("{}", encoding="utf-8")
         files = task_manager._collect_outputs(out_dir, "t_out", mode="both")
         types = {f["type"] for f in files}
-        self.assertEqual(types, {"design", "plate", "manifest"})
+        self.assertEqual(types, {"design", "plate", "manifest", "masks"})
+        mf = next(f for f in files if f["type"] == "manifest")
+        # both 模式优先 plate 版 manifest（印前审计凭据）
+        self.assertEqual(mf["filename"], "result.plate.manifest.json")
         for f in files:
             self.assertTrue(f["download_url"].startswith("/api/download/t_out/"))
-            self.assertGreater(f["size"], 0)
 
     def test_collect_outputs_single_mode(self):
         """单模式（plate）：产物是 result.psb 本身（引擎不加后缀）——回归锁。"""
         out_dir = Path(self._tmp.name) / "outputs" / "t_single"
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "result.psb").write_bytes(b"x" * 10)
+        (out_dir / "result.plate.manifest.json").write_text("{}", encoding="utf-8")
         files = task_manager._collect_outputs(out_dir, "t_single", mode="plate")
-        self.assertEqual(len(files), 1)
-        self.assertEqual(files[0]["type"], "plate")
-        self.assertEqual(files[0]["filename"], "result.psb")
+        types = {f["type"] for f in files}
+        self.assertEqual(types, {"plate", "manifest"})
+        psb = next(f for f in files if f["type"] == "plate")
+        self.assertEqual(psb["filename"], "result.psb")
