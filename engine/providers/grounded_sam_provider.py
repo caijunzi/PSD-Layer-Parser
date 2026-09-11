@@ -124,16 +124,48 @@ class GroundedSAMProvider:
             self.backend = "fallback_rule_based"
             return
 
+        # 设备决策（RK-16 补充）：torch CUDA 驱动存在 ≠ 可用——若本机 GPU 的
+        # sm 架构不被当前 torch 轮子支持（如 sm_120 vs torch≤2.6），张量运算会抛
+        # "no kernel image"。故做一次真实矩阵乘探活，失败回落 CPU。
+        #
+        # ⚠️ 实测结论（2026-09-11，torch 2.7.1+cu128）：探活/加载/推理全链路已通，
+        # 但 SAM2-tiny 在 1024px 输入上 GPU 收益不敌传输与串行开销——
+        # GPU 神经分割 61.98s vs CPU 47.65s（慢 30%），且 GPU 并行浮点
+        # 破坏 RK-16 逐像素复现（同 seed 掩模偏差 ~0.02%）。
+        # ⇒ 默认分割回落 CPU；需要实验 GPU 时设环境变量 ULS_SEGMENT_DEVICE=cuda。
+        self.torch_device = "cpu"
+        force_gpu = os.environ.get("ULS_SEGMENT_DEVICE", "").lower() in ("cuda", "gpu")
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                _ = torch.zeros(8, device="cuda") @ torch.zeros(8, device="cuda")
+                torch.cuda.synchronize()
+                if force_gpu:
+                    self.torch_device = "cuda"
+                print(f"[GroundedSAMProvider] CUDA 探活通过: {torch.cuda.get_device_name(0)}"
+                      + ("（分割使用 GPU）" if self.torch_device == "cuda" else
+                         "（分割默认 CPU：GPU 实测无净收益且破坏逐像素复现，"
+                         "设 ULS_SEGMENT_DEVICE=cuda 可启用）"))
+        except Exception as e:
+            self.torch_device = "cpu"
+            print(f"[GroundedSAMProvider] CUDA 探活失败（分割回落 CPU）: {type(e).__name__}: {str(e)[:120]}")
+
         try:
             from groundingdino.util.inference import load_model as load_dino
             from sam2.build_sam import build_sam2
             from sam2.sam2_image_predictor import SAM2ImagePredictor
 
             print("[GroundedSAMProvider] Loading Grounding DINO Swin-T model...")
-            self.dino_model = load_dino(self.dino_cfg, self.dino_ckpt, device="cpu")
+            # DINO 固定 CPU：其 deform-attn 的 CUDA 分支依赖未编译的 `_C` 扩展
+            # （third_party 的 ms_deform_attn.py:330），GPU 上会 NameError；
+            # 且 DINO 输入仅 800px，CPU 开销可接受。SAM2（大图 encoder，最重）走 GPU。
+            self.dino_device = "cpu"
+            self.sam_device = self.torch_device
+            self.dino_model = load_dino(self.dino_cfg, self.dino_ckpt, device=self.dino_device)
 
             print("[GroundedSAMProvider] Loading SAM 2 Hiera-Tiny model...")
-            sam_model = build_sam2(self.sam_cfg, self.sam_ckpt, device="cpu")
+            sam_model = build_sam2(self.sam_cfg, self.sam_ckpt, device=self.sam_device)
             self.sam_predictor = SAM2ImagePredictor(sam_model)
 
             self.backend = "grounded_sam2_neural"
@@ -272,7 +304,7 @@ class GroundedSAMProvider:
                     caption=prompt,
                     box_threshold=DEFAULT_BOX_THRESHOLD,
                     text_threshold=DEFAULT_TEXT_THRESHOLD,
-                    device="cpu"
+                    device=self.dino_device
                 )
                 if len(boxes) == 0:
                     continue

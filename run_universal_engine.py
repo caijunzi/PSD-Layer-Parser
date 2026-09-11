@@ -157,7 +157,21 @@ def _seed_everything(seed: int) -> None:
         pass
 
 
-def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=4.0, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42):
+def resolve_output_size(w_lr: int, h_lr: int, target_scale, target_w, target_h, preset: dict):
+    """输出尺寸决策。优先级：显式 target_w/h > CLI --scale > preset.super_res_scale > 4.0。
+
+    历史缺陷（全量回归时暴露）：原实现 `preset.get("super_res_scale", target_scale)`
+    在 preset 提供该键时无条件覆盖 CLI —— CLI 形同虚设。
+    """
+    if target_w is not None and target_h is not None:
+        return int(target_w), int(target_h)
+    scale = target_scale
+    if scale is None:
+        scale = preset.get("super_res_scale", 4.0)
+    return int(w_lr * scale), int(h_lr * scale)
+
+
+def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=None, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42):
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
     from engine.schemas.manifest import (
@@ -206,11 +220,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     print(f"[Engine] Source Resolution: {w_lr} x {h_lr}")
 
     # Determine target resolution
-    if target_w is not None and target_h is not None:
-        out_w, out_h = int(target_w), int(target_h)
-    else:
-        scale = preset.get("super_res_scale", target_scale)
-        out_w, out_h = int(w_lr * scale), int(h_lr * scale)
+    out_w, out_h = resolve_output_size(w_lr, h_lr, target_scale, target_w, target_h, preset)
 
     target_dpi = float(dpi) if dpi is not None else float(preset.get("dpi", 150.0))
     print(f"[Engine] Target Output Resolution: {out_w} x {out_h} (Scale: {out_w/w_lr:.2f}x)")
@@ -607,7 +617,8 @@ if __name__ == "__main__":
     parser.add_argument("--input", required=True, help="Path to input source image")
     parser.add_argument("--output", required=True, help="Path to output .psb file")
     parser.add_argument("--preset", default="japanese_screen_gold", help="Style preset name or JSON path")
-    parser.add_argument("--scale", type=float, default=4.0, help="Upscale scaling factor (default: 4.0)")
+    parser.add_argument("--scale", type=float, default=None,
+                        help="Upscale scaling factor（CLI 最高优先；未提供时用 preset.super_res_scale，再否则 4.0）")
     parser.add_argument("--dpi", type=float, default=150.0, help="Target print resolution in PPI (default: 150.0)")
     parser.add_argument("--width", type=int, default=None, help="Explicit target width in pixels")
     parser.add_argument("--height", type=int, default=None, help="Explicit target height in pixels")
