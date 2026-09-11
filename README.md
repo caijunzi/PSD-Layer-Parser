@@ -79,6 +79,30 @@ pip install -r requirements.txt
 pip install -r requirements-ai.txt
 ```
 
+### 使用方式
+
+#### 方式 1：WebUI（推荐，开发中）
+
+```bash
+# 启动 Web 界面
+cd webui/backend
+python main.py
+
+# 浏览器访问 http://localhost:8099
+```
+
+**特性**：
+- 🎨 拖拽上传、可视化配置
+- 📊 实时进度与日志推送
+- 🔍 智能 preset 推荐
+- 📦 批量结果管理
+
+详见 [webui/README.md](webui/README.md) 与 [docs/WEBUI_TECHNICAL_SPEC.md](docs/WEBUI_TECHNICAL_SPEC.md)（12000 字完整技术设计）
+
+---
+
+#### 方式 2：命令行（稳定）
+
 ### 1. 全流程端到端 16K 母版生产
 ```bash
 python -u run_universal_engine.py --input inputs/source_4000.jpg --output outputs/Rosetsu_Master_16k.psb --preset japanese_screen_gold --scale 4.0 --dpi 150.0 --profile robust_performance
