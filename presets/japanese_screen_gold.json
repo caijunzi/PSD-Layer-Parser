@@ -7,7 +7,7 @@
       "prompt": "wild goose . flock of birds . flying geese .",
       "instance_split": true,
       "max_instances": 12,
-      "region_note": "三处雁群带 → 墨点连通域逐只成层（DINO 对 30-60px 雁漏检，改用形态学）",
+      "region_note": "三处雁群带（左/中/右上）；右上带右边界收至 0.85 避开题跋区（审计修复：题跋墨字曾被误判为雁）",
       "blob_instances": [
         {
           "region": [
@@ -37,7 +37,7 @@
           "region": [
             0.72,
             0.11,
-            0.99,
+            0.85,
             0.33
           ],
           "ink_delta": 45,

@@ -268,6 +268,21 @@ class GroundedSAMProvider:
                 sub = np.zeros((y1 - y0, x1 - x0), np.uint8)
                 sub[labels == i] = 255
                 m[y0:y1, x0:x1] = sub
+                # 去重：与已产出 blob 的 IoU > 0.9 视为同一对象（连通域天然互斥，
+                # 此处为跨 region 配置的保险）
+                mb = m > 127
+                dup = False
+                for km in out.values():
+                    kb = km > 127
+                    inter = int(np.count_nonzero(mb & kb))
+                    if inter == 0:
+                        continue
+                    union = int(np.count_nonzero(mb | kb))
+                    if union and inter / union > 0.9:
+                        dup = True
+                        break
+                if dup:
+                    continue
                 idx += 1
                 out[f"{base_name}_{idx:02d}"] = m
         return out
@@ -641,7 +656,11 @@ class GroundedSAMProvider:
                 # 每个框独立 SAM 成层 —— 实现"每只雁/每块石/每棵树各自一层"。
                 regions = cls_info.get("regions") or ([list(cls_info["region"])]
                                                       if cls_info.get("region") else [])
-                instance_split = bool(cls_info.get("instance_split"))
+                # 2026-09-12 审计修复：配了 blob_instances（墨点实例化）的类跳过
+                # DINO/SAM 实例拆分——否则两条通道产出同名实例键（_01/_02…）互相
+                # 覆盖（隐式），且白跑一遍 DINO+SAM（雁类实测双通道）。
+                instance_split = (bool(cls_info.get("instance_split"))
+                                  and not cls_info.get("blob_instances"))
                 region_instances = instance_split and bool(regions)
                 # 实例拆分一律用低阈值（小目标在高阈值下漏检）；regions 仅作可选位置过滤
                 box_thresh = (0.22 if instance_split else DEFAULT_BOX_THRESHOLD)
@@ -692,10 +711,30 @@ class GroundedSAMProvider:
                         layer_mask = np.maximum(layer_mask, (best_mask.astype(np.uint8) * 255))
 
                 if instance_split:
+                    # 2026-09-12 审计修复：DINO 低阈值下会检出重叠框（同一目标的
+                    # 两个近似框），各自独立 SAM 会产生**几乎相同的实例层**
+                    # （实测 04C_01 与 _02 掩模 IoU = 1.000）。按掩模 IoU > 0.9 去重。
+                    kept: Dict[str, np.ndarray] = {}
                     for iname, imask in instances.items():
-                        if np.any(imask > 0):
-                            results[iname] = imask
-                    print(f"[GroundedSAMProvider] Neural instances '{layer_name}': {len(instances)} 个实例")
+                        if not np.any(imask > 0):
+                            continue
+                        dup = False
+                        mb = imask > 127
+                        for km in kept.values():
+                            kb = km > 127
+                            inter = int(np.count_nonzero(mb & kb))
+                            if inter == 0:
+                                continue
+                            union = int(np.count_nonzero(mb | kb))
+                            if union and inter / union > 0.9:
+                                dup = True
+                                break
+                        if not dup:
+                            kept[iname] = imask
+                    dropped = len(instances) - len(kept)
+                    results.update(kept)
+                    print(f"[GroundedSAMProvider] Neural instances '{layer_name}': "
+                          f"{len(kept)} 个实例（去重丢弃 {dropped}）")
                 elif np.any(layer_mask > 0):
                     results[layer_name] = layer_mask
                     print(f"[GroundedSAMProvider] Neural segmented layer '{layer_name}': {np.sum(layer_mask > 0)} px")

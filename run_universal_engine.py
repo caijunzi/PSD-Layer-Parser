@@ -348,6 +348,18 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     sorter = UniversalLayerSorter()
     sorted_layers = sorter.sort_layers(masks_dict, src_lr)
     
+    # 层序规范化（2026-09-12 深度审计修复）：
+    # 原实现直接沿用深度排序器输出，实例层（04C_03/_05/_04…、08_雁_09/_01…）
+    # 与语义层交错，设计师在 PS 中找层困难（实测 39/43 层与规范顺序不符）。
+    # 现按「名称前缀数字 + 字母」稳定排序，使堆叠呈现
+    # 底板(02) → 内容(03…09) → 装饰(10A/10B) → 残层(11) 的规范层次。
+    def _layer_sort_key(nm: str):
+        import re as _re
+        m = _re.match(r"^(\d+)([A-Za-z]?)", str(nm))
+        return (int(m.group(1)), m.group(2).upper(), str(nm)) if m else (99, "", str(nm))
+
+    sorted_layers.sort(key=lambda _l: _layer_sort_key(_l.get("name", "")))
+
     # 图层属性由 preset.layer_semantics.layer_attributes 驱动（SSOT，G2）：
     # 品类语义（如折痕层的正片叠底与古雅基色）只改 preset，不改内核
     for lyr in sorted_layers:
@@ -587,6 +599,17 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
             total_recon_px += rec.recon_pixel_count
 
         man.layers.append(rec)
+
+    # 支撑层补录（2026-09-12 审计修复）：底板由 psb_builder 单独添加，
+    # 不在 sorted_layers 中，导致 manifest 层清单与实际 PSB 差 1 层
+    # （实测 42 vs 43）。此处补录，保证「manifest 层清单 == PSB 实际层」。
+    _declared = {getattr(r, "name", "") for r in man.layers}
+    for _sup_name in (bg_name,):
+        if _sup_name and _sup_name not in _declared:
+            _sup_rec = LayerGenerationRecord(name=_sup_name)
+            _sup_rec.add_reason(f"support_background({inpaint_engine})")
+            _sup_rec.recon_pixel_count = int(total_recon_px)
+            man.layers.append(_sup_rec)
 
     man.totals["generated_pixel_ratio"] = round(man.generated_ratio(), 6)
     man.totals["deterministic_fill_ratio"] = round(man.deterministic_fill_ratio(), 6)
