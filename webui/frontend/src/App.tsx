@@ -27,7 +27,7 @@ type OutputFile = {
 }
 
 type WsMessage = {
-  type: 'progress' | 'completed' | 'error'
+  type: 'progress' | 'completed' | 'error' | 'audit'
   task_id: string
   stage?: string | null
   progress?: number
@@ -77,6 +77,7 @@ export default function App() {
   const [taskId, setTaskId] = useState<string | null>(null)
   const [outputs, setOutputs] = useState<OutputFile[]>([])
   const [manifest, setManifest] = useState<Record<string, any>>({})
+  const [audit, setAudit] = useState<Record<string, any> | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
@@ -186,6 +187,9 @@ export default function App() {
           setStage('完成')
           setOutputs(msg.output_files ?? [])
           setManifest(msg.manifest ?? {})
+        } else if (msg.type === 'audit') {
+          // 交付前 8 维审计门结果（任务完成后异步推送）
+          setAudit(msg)
           setElapsed(msg.elapsed_time ?? 0)
           setPhase('done')
           ws.close()
@@ -695,6 +699,56 @@ export default function App() {
                 </div>
               )
             })()}
+
+            {/* 交付审计（8 维门禁）：任务完成后异步推送 */}
+            {audit && (
+              <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5">
+                <div className="mb-3 flex items-center gap-2">
+                  <h4 className="text-sm font-semibold text-neutral-200">交付审计 · 8 维门禁</h4>
+                  <span
+                    className={
+                      'rounded border px-2 py-0.5 text-[11px] ' +
+                      (audit.passed
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                        : audit.passed === false
+                          ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                          : 'border-neutral-600 text-neutral-400')
+                    }
+                  >
+                    {audit.passed ? '全部通过' : audit.passed === false ? '存在不通过维度' : audit.error ? '审计异常' : '审计中…'}
+                  </span>
+                  {audit.download_url && (
+                    <a href={audit.download_url} className="ml-auto text-[11px] text-blue-400 hover:underline">
+                      下载审计报告
+                    </a>
+                  )}
+                </div>
+                {audit.dims ? (
+                  <div className="space-y-1">
+                    {Object.entries(audit.dims).map(([k, v]: [string, any]) => (
+                      <div key={k} className="flex items-start gap-2 text-xs">
+                        <span>{v.passed ? '✅' : '❌'}</span>
+                        <span className="w-32 flex-shrink-0 text-neutral-300">{k}</span>
+                        <span className="flex-1 truncate font-mono text-[11px] text-neutral-500">
+                          {JSON.stringify(v.metrics ?? {})}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : audit.error ? (
+                  <p className="text-xs text-red-400">{audit.error}</p>
+                ) : (
+                  <p className="text-xs text-neutral-500">审计进行中（读取 16K 产物约需 1-2 分钟）…</p>
+                )}
+                {(audit.issues ?? []).length > 0 && (
+                  <ul className="mt-3 space-y-1">
+                    {audit.issues.map((it: string, i: number) => (
+                      <li key={i} className="text-[11px] text-red-300">· {it}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
 
             <div className="flex justify-end">
               <button

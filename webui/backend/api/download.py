@@ -19,6 +19,8 @@ CANDIDATES = {
     "plate": ["result.plate.psb", "result.psb"],
     "manifest": ["result.plate.manifest.json", "result.design.manifest.json",
                  "result.manifest.json"],
+    # 交付前 8 维审计报告（tools/audit_psb.py 产出，任务完成后异步生成）
+    "audit": ["result.audit.json"],
 }
 
 

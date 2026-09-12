@@ -236,6 +236,11 @@ class TaskManager:
                     "completed_at": task["completed_at"],
                     "elapsed_time": elapsed_total,
                 })
+                # 交付前 8 维审计门（2026-09-12 接入，异步不阻塞完成消息）：
+                # 层属性/分辨率/实例重复/内容承载/合成等价性/底板纯净度/plate 合规/
+                # manifest 一致性 → 结果落盘 result.audit.json 并 WS 推送。
+                # 审计不通过**不改变任务状态**（产物仍可下载），但显式告警供人工复核。
+                asyncio.create_task(self._run_delivery_audit(task_id, out_dir, cfg))
             else:
                 task["status"] = "failed"
                 task["error"] = f"引擎退出码 {proc.returncode}"
@@ -244,6 +249,54 @@ class TaskManager:
                     "error": {"code": "ENGINE_ERROR",
                               "message": task["error"]},
                 })
+
+    async def _run_delivery_audit(self, task_id: str, out_dir: Path, cfg: dict) -> None:
+        """交付前 8 维审计门（异步）：落盘 result.audit.json + WS 推送摘要。
+
+        审计门见 tools/audit_psb.py；阈值已按 V2 参照产物校准。
+        """
+        try:
+            import sys
+            _root = Path(__file__).resolve().parents[3]      # → 项目根
+            if str(_root) not in sys.path:
+                sys.path.insert(0, str(_root))
+            from tools.audit_psb import audit as run_audit
+
+            psb = next((p for p in (out_dir / "result.plate.psb", out_dir / "result.psb",
+                                    out_dir / "result.design.psb") if p.is_file()), None)
+            if psb is None:
+                return
+            manifest = next((p for p in (out_dir / "result.plate.manifest.json",
+                                         out_dir / "result.manifest.json",
+                                         out_dir / "result.design.manifest.json") if p.is_file()), None)
+            src = self._resolve_input(cfg.get("file_id", ""))
+            res = await asyncio.to_thread(
+                run_audit, str(psb),
+                str(manifest) if manifest else None,
+                str(src) if src else None,
+                False,
+            )
+            (out_dir / "result.audit.json").write_text(
+                json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+            if isinstance(res, dict):
+                res = dict(res)
+                res["has_report"] = True
+            await ws_manager.broadcast(task_id, {
+                "type": "audit", "task_id": task_id,
+                "passed": res.get("passed"),
+                "dims": {k: {"passed": v.get("passed"), "metrics": v.get("metrics")}
+                         for k, v in res.get("dims", {}).items()},
+                "issues": res.get("issues", []),
+                "download_url": f"/api/download/{task_id}/audit",
+            })
+        except Exception as e:  # 审计异常不得影响任务本身
+            try:
+                await ws_manager.broadcast(task_id, {
+                    "type": "audit", "task_id": task_id, "passed": None,
+                    "error": f"{type(e).__name__}: {str(e)[:160]}",
+                })
+            except Exception:
+                pass
 
     def _resolve_input(self, file_id: str) -> Optional[Path]:
         """根据 file_id 找上传文件（扩展名未知，glob）。"""
