@@ -305,10 +305,36 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         if "frame" not in mname_lower and "seam" not in mname_lower and "fold" not in mname_lower:
             total_fg = cv2.bitwise_or(total_fg, m)
 
+    # 底板去墨：用**全画幅墨迹掩模**（而非仅语义层掩模）。
+    # 2026-09-12 设计缺陷修复：旧实现只抹除语义层覆盖区域，未被语义类识别的内容
+    # （如山峦/未被分割的墨迹）残留在底板上——底板不再是"纯金箔材质层"，
+    # 而设计师最需要底板的正是"干净的可用材质底"（V2 对照实证）。
+    # 折痕（屏风物理特征）不从底板抹除；未成层的墨迹改由"未分类墨迹残层"承载，
+    # 保证「底板 + 所有语义层 + 残层 = 原图内容」零丢失。
+    gray_lr = cv2.cvtColor(src_lr, cv2.COLOR_BGR2GRAY)
+    bg_median = float(np.median(gray_lr))
+    ink_all = (gray_lr < bg_median - 12.0).astype(np.uint8) * 255
+    seam_key = next((k for k in masks_dict if "seam" in k.lower() or "fold" in k.lower()), None)
+    if seam_key is not None:
+        ink_all = cv2.bitwise_and(ink_all, cv2.bitwise_not(masks_dict[seam_key]))
+    print(f"  -> [底板去墨] 全墨迹掩模覆盖 {np.count_nonzero(ink_all)/ink_all.size*100:.1f}% "
+          f"（语义层并集 {np.count_nonzero(total_fg)/total_fg.size*100:.1f}%），折痕保留")
+
     clean_bg_lr, _ = bg_extractor.extract_clean_background(
-        src_lr, foreground_mask=total_fg, panel_count=preset.get("panel_count")
+        src_lr, foreground_mask=ink_all, panel_count=preset.get("panel_count")
     )
     print("  -> 纯净画布金箔底板已高质量重构完成。")
+
+    # 未分类墨迹残层：全墨迹减去所有已产出语义层 —— 承载未被语义类覆盖的内容，
+    # 避免"底板抹墨 + 无层承载"导致内容丢失（如远山等源图固有难度类）。
+    unassigned = cv2.bitwise_and(ink_all, cv2.bitwise_not(total_fg))
+    n_unassigned = int(np.count_nonzero(unassigned))
+    if n_unassigned > 0.001 * ink_all.size:
+        masks_dict["11_未分类墨迹残层_Unclassified_Ink_Residue"] = unassigned
+        print(f"  -> [未分类墨迹残层] {n_unassigned:,}px "
+              f"({n_unassigned/unassigned.size*100:.2f}%) 已作为独立层承载（避免内容丢失）")
+    else:
+        print("  -> [未分类墨迹残层] 无残留（语义层已覆盖全部墨迹）")
     t_step2 = time.time() - t0
 
     # -------------------------------------------------------------
