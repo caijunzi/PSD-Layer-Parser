@@ -5,7 +5,47 @@
     {
       "name": "08_芦雁群禽_Geese_Flock",
       "prompt": "wild goose . flock of birds . flying geese .",
-      "instance_split": true
+      "instance_split": true,
+      "max_instances": 12,
+      "region_note": "三处雁群带 → 墨点连通域逐只成层（DINO 对 30-60px 雁漏检，改用形态学）",
+      "blob_instances": [
+        {
+          "region": [
+            0.19,
+            0.15,
+            0.46,
+            0.35
+          ],
+          "ink_delta": 45,
+          "min_blob_px": 40,
+          "max_blob_px": 2500,
+          "max_instances": 12
+        },
+        {
+          "region": [
+            0.5,
+            0.15,
+            0.72,
+            0.33
+          ],
+          "ink_delta": 45,
+          "min_blob_px": 40,
+          "max_blob_px": 2500,
+          "max_instances": 12
+        },
+        {
+          "region": [
+            0.72,
+            0.11,
+            0.99,
+            0.33
+          ],
+          "ink_delta": 45,
+          "min_blob_px": 40,
+          "max_blob_px": 2500,
+          "max_instances": 12
+        }
+      ]
     },
     {
       "name": "07_高士侍童人物_Figures_Scholar_Attendant",
@@ -29,7 +69,23 @@
         0.8
       ],
       "region_boxes": 3,
-      "region_note": "画面中央枯树群（5-6 棵，P1 实证 region+SAM bbox 75.1%→21.6%）"
+      "region_note": "中央枯树丛 + 右上枯树丛 → 每棵独立成层",
+      "regions": [
+        [
+          0.34,
+          0.22,
+          0.78,
+          0.82
+        ],
+        [
+          0.7,
+          0.08,
+          0.94,
+          0.42
+        ]
+      ],
+      "instance_split": true,
+      "max_instances": 10
     },
     {
       "name": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
@@ -38,7 +94,16 @@
     },
     {
       "name": "04C_湖心独立孤石_Solitary_Water_Rock",
-      "prompt": "solitary rock in water . small rock island ."
+      "prompt": "rock in water . stone in water . small rock island . rocky outcrop .",
+      "region": [
+        0.28,
+        0.52,
+        0.98,
+        0.85
+      ],
+      "instance_split": true,
+      "max_instances": 8,
+      "region_note": "水面带（石矶散布）→ 每块石独立成层"
     },
     {
       "name": "04B_中景平渚矶岸_Midground_Shorelines",

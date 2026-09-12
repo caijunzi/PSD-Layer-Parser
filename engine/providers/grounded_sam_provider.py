@@ -74,6 +74,7 @@ BBOX_EXEMPT_KEYWORDS: tuple[str, ...] = (
     "base", "底板",           # 金箔/织物底板天然全画布
     "frame", "外框", "brocade", "绫边",  # 外框环天然全画布
     "fold", "seam", "折痕",   # 折缝贯穿全画布（V2 实测 47% 靠近阈值，一并豁免）
+    "residue", "残层", "unclassified",  # 未分类墨迹残层：内容载体，天然散布全画布
 )
 
 
@@ -226,6 +227,51 @@ class GroundedSAMProvider:
             merged = np.maximum(merged, masks[idx].astype(np.uint8) * 255)
         return merged
 
+    def _infer_region_blob_instances(self, image_bgr: np.ndarray, blobs_cfg: list,
+                                     base_name: str) -> Dict[str, np.ndarray]:
+        """区域约束 + 墨点连通域实例化（2026-09-12）：每只雁/每块小石独立成层。
+
+        适用：独立小墨点对象（雁、飞鸟、小石、印）。DINO 在 800px 输入下对
+        原图 30-60px 的目标（雁）漏检（实测 th=0.22 仅 1 个有效框，其余为石矶
+        假阳性），故改用纯形态学：预设区域 → 阈值化墨点 → 连通域 → 逐 blob 成层。
+        """
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        out: Dict[str, np.ndarray] = {}
+        idx = 0
+        for cfg in blobs_cfg:
+            r = cfg["region"]
+            x0, y0 = int(r[0] * w), int(r[1] * h)
+            x1, y1 = int(r[2] * w), int(r[3] * h)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            roi = gray[y0:y1, x0:x1]
+            thr = float(np.median(gray)) - float(cfg.get("ink_delta", 35))
+            ink = (roi < thr).astype(np.uint8) * 255
+            ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+            n, labels, stats, cents = cv2.connectedComponentsWithStats(ink)
+            cands = []
+            max_ar = float(cfg.get("max_aspect_ratio", 4.0))
+            for i in range(1, n):
+                a = int(stats[i, cv2.CC_STAT_AREA])
+                bw_ = int(stats[i, cv2.CC_STAT_WIDTH])
+                bh_ = int(stats[i, cv2.CC_STAT_HEIGHT])
+                if not (int(cfg.get("min_blob_px", 25)) <= a <= int(cfg.get("max_blob_px", 3000))):
+                    continue
+                # 长宽比过滤：排除折痕/边框等细长条假阳性
+                if max(bw_, bh_) / max(1, min(bw_, bh_)) > max_ar:
+                    continue
+                cands.append((float(cents[i][0]), i))
+            cands.sort()  # 按 x 从左到右编号（阅读顺序）
+            for _, i in cands[:int(cfg.get("max_instances", 20))]:
+                m = np.zeros((h, w), np.uint8)
+                sub = np.zeros((y1 - y0, x1 - x0), np.uint8)
+                sub[labels == i] = 255
+                m[y0:y1, x0:x1] = sub
+                idx += 1
+                out[f"{base_name}_{idx:02d}"] = m
+        return out
+
     def _load_preset_config(self) -> dict:
         """按 preset_name 加载 preset 配置（缓存）。"""
         if getattr(self, "_preset_cfg", None) is not None:
@@ -283,22 +329,43 @@ class GroundedSAMProvider:
         region_sam_keys = []
         if neural_masks:
             for cls_info in (classes or []):
-                reg = cls_info.get("region")
-                if not reg:
+                regions = cls_info.get("regions") or (
+                    [cls_info["region"]] if cls_info.get("region") else [])
+                if not regions:
                     continue
                 cname = cls_info.get("name", "")
-                key = next((k for k in neural_masks if k == cname or cname in k), cname)
-                try:
-                    rm = self._infer_region_sam(
-                        image_bgr, tuple(reg), int(cls_info.get("region_boxes", 3)))
-                    if np.count_nonzero(rm > 127) == 0:
-                        continue
-                    neural_masks[key] = rm
-                    region_sam_keys.append(key)
-                    print(f"[GroundedSAMProvider] 区域先验 SAM: {key} "
-                          f"({np.count_nonzero(rm > 127):,}px, region={reg})")
-                except Exception as e:
-                    print(f"[GroundedSAMProvider] 区域先验 SAM 异常 {cname}: {e}")
+                multi = len(regions) > 1
+                for ri, reg in enumerate(regions, start=1):
+                    key = f"{cname}_{ri:02d}" if multi else cname
+                    try:
+                        rm = self._infer_region_sam(
+                            image_bgr, tuple(reg), int(cls_info.get("region_boxes", 3)))
+                        if np.count_nonzero(rm > 127) == 0:
+                            continue
+                        neural_masks[key] = rm
+                        region_sam_keys.append(key)
+                        print(f"[GroundedSAMProvider] 区域先验 SAM: {key} "
+                              f"({np.count_nonzero(rm > 127):,}px, region={reg})")
+                    except Exception as e:
+                        print(f"[GroundedSAMProvider] 区域先验 SAM 异常 {cname}: {e}")
+
+        # 2.6 墨点连通域实例化（2026-09-12）：配 blob_instances 的类
+        #     （雁/小石等独立小墨点）→ 区域内逐 blob 成层，不依赖 DINO/SAM。
+        blob_instances_produced = []
+        for cls_info in (classes or []):
+            blobs_cfg = cls_info.get("blob_instances")
+            if not blobs_cfg:
+                continue
+            cname = cls_info.get("name", "")
+            try:
+                blob_masks = self._infer_region_blob_instances(image_bgr, blobs_cfg, cname)
+                if not blob_masks:
+                    continue
+                neural_masks.update(blob_masks)
+                blob_instances_produced.extend(blob_masks.keys())
+                print(f"[GroundedSAMProvider] 墨点实例化 {cname}: {len(blob_masks)} 个独立实例")
+            except Exception as e:
+                print(f"[GroundedSAMProvider] 墨点实例化异常 {cname}: {e}")
 
         # 3. 神经掩模经质量门校验后置入解耦图层（未通过者保留规则掩模）
         #    神经掩模用中文图层名，规则掩模用英文键，需经同一映射才能配对比较
@@ -434,6 +501,7 @@ class GroundedSAMProvider:
         refine_set = {r for r in recovered}
         band_set = set(band_produced)
         region_sam_set = set(region_sam_keys)
+        blob_set = set(blob_instances_produced)
         for cname in configured:
             matched = [k for k in final_masks if k == cname or cname in k or k in cname]
             if matched:
@@ -445,6 +513,8 @@ class GroundedSAMProvider:
                     src = "density_band"
                 elif mkey in region_sam_set or cname in region_sam_set:
                     src = "region_sam"
+                elif mkey in blob_set or cname in blob_set:
+                    src = "blob_instance"
                 else:
                     src = "sam"
                 produced_details.append({"name": mkey, "source": src})
@@ -565,21 +635,43 @@ class GroundedSAMProvider:
                 continue
 
             try:
+                # 区域约束的实例拆分（2026-09-12）：类同时配 regions + instance_split 时，
+                # **降低 DINO 阈值**检出更多候选框（0.35 → 0.22，雁/石/树等小目标在
+                # 高阈值下漏检），再用 preset 的区域先验过滤（框中心落在区域内），
+                # 每个框独立 SAM 成层 —— 实现"每只雁/每块石/每棵树各自一层"。
+                regions = cls_info.get("regions") or ([list(cls_info["region"])]
+                                                      if cls_info.get("region") else [])
+                instance_split = bool(cls_info.get("instance_split"))
+                region_instances = instance_split and bool(regions)
+                # 实例拆分一律用低阈值（小目标在高阈值下漏检）；regions 仅作可选位置过滤
+                box_thresh = (0.22 if instance_split else DEFAULT_BOX_THRESHOLD)
                 boxes, logits, phrases = predict_dino(
                     model=self.dino_model,
                     image=img_tensor,
                     caption=prompt,
-                    box_threshold=DEFAULT_BOX_THRESHOLD,
+                    box_threshold=box_thresh,
                     text_threshold=DEFAULT_TEXT_THRESHOLD,
                     device=self.dino_device
                 )
                 if len(boxes) == 0:
                     continue
 
+                # 候选框：区域过滤 + 大框过滤，按面积降序（大目标优先）并限量
+                cand = []
+                for box in boxes:
+                    cx, cy, bw, bh = box.tolist()
+                    if regions and not any(
+                            r[0] <= cx <= r[2] and r[1] <= cy <= r[3] for r in regions):
+                        continue
+                    if bw * bh > MAX_BOX_AREA_RATIO:
+                        continue
+                    cand.append((bw * bh, box))
+                cand.sort(key=lambda t: -t[0])
+                max_inst = int(cls_info.get("max_instances", 12)) if region_instances else len(cand)
+
                 layer_mask = np.zeros((h, w), dtype=np.uint8)
                 instances: Dict[str, np.ndarray] = {}
-                instance_split = bool(cls_info.get("instance_split"))
-                for idx, box in enumerate(boxes, start=1):
+                for idx, (_, box) in enumerate(cand[:max_inst], start=1):
                     cx, cy, bw, bh = box.tolist()
                     x1 = max(0, int((cx - bw / 2.0) * w))
                     y1 = max(0, int((cy - bh / 2.0) * h))

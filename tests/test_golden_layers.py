@@ -92,9 +92,28 @@ class TestGoldenScreenGold(unittest.TestCase):
         self.assertIn("note", dm, "04D 必须保留不可行结论记录")
 
     def test_instance_split_for_flock(self):
-        """雁群按实例拆分（用户要求"尽可能细致"）。"""
+        """雁群逐只拆分：blob_instances（墨点连通域实例化，DINO 对 30-60px 雁漏检）。
+
+        用户核心要求："能单独被提取的物类，应该都是单独层"。
+        """
         flock = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("08_"))
         self.assertTrue(flock.get("instance_split"))
+        self.assertTrue(flock.get("blob_instances"), "雁群必须配 blob_instances 逐只成层")
+        for cfg in flock["blob_instances"]:
+            x0, y0, x1, y1 = cfg["region"]
+            self.assertTrue(0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1)
+            self.assertLess(cfg["min_blob_px"], cfg["max_blob_px"])
+
+    def test_rock_instances_configured(self):
+        """石矶多块拆分（region + instance_split，实测 8 块）。"""
+        rock = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("04C_"))
+        self.assertTrue(rock.get("instance_split"))
+        self.assertIn("region", rock)
+
+    def test_tree_regions_multi(self):
+        """枯树两丛各一层（regions 多区域 → 05A_01/_02）。"""
+        tree = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("05A_"))
+        self.assertGreaterEqual(len(tree.get("regions", [])), 2)
 
     def test_output_policy_present(self):
         """输出策略（双线模式/复现尺度/DPI/ICC/印刷条件）必须在 preset 中显式声明。"""
