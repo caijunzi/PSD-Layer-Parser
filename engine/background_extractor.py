@@ -64,7 +64,14 @@ class UniversalBackgroundExtractor:
             pure_bg_mask[:int(h*0.1), :] = True
             pure_bg_mask[int(h*0.9):, :] = True
 
-        # 3. Neural inpainting or parametric reconstruction
+        # 3. Reconstruction strategy
+        #    2026-09-12 深度审计（两轮实证后定稿）：
+        #    第一轮：把折叠屏风从 _reconstruct_paneled_screen 改为 LaMa 逐像素补全
+        #    —— 实测**更差**（大墨块区补不净：右侧山峦残留 1.1%→21.8%、
+        #    右下岩石 17.8%）。LaMa 擅长小缝/细节补全，不擅长整片墨区。
+        #    第二轮（当前）：保留 panel 参考扇复制（大区域去墨彻底）+ **强化墨迹
+        #    核心区 alpha**（原实现只用高斯模糊 alpha，墨迹核心仅 ~0.6 → 残留；
+        #    现取 max(模糊, 二值×0.95) 使核心区近乎完全替换，边缘仍渐变防硬边）。
         if panel_count is not None and panel_count > 1:
             clean_bg = self._reconstruct_paneled_screen(img_bgr, dil_fg, panel_count, painting_roi=painting_roi)
         elif self.inpainting_provider is not None:
@@ -170,7 +177,27 @@ class UniversalBackgroundExtractor:
         ref_x1 = int(inner_l + (best_panel_idx + 1) * w_panel)
         ref_panel = img_bgr[inner_t:inner_b, ref_x0:ref_x1].copy()
 
+        # 2026-09-12 审计修复：参考扇是「墨最少」而非「零墨」——它自带的墨迹会被
+        # 复制到其余各扇（石矶区残留的主因之一）。先清理参考扇自身墨迹：
+        # 按列用非墨像素的均值填充（保留金箔纵向纹理），整列皆墨时用全扇净色。
+        ref_ink = dil_fg[inner_t:inner_b, ref_x0:ref_x1] > 0
+        if ref_ink.any():
+            global_clean = np.median(ref_panel[~ref_ink], axis=0) if (~ref_ink).any() else np.array([200, 200, 200], np.uint8)
+            for x in range(ref_panel.shape[1]):
+                col_ink = ref_ink[:, x]
+                if not col_ink.any():
+                    continue
+                if (~col_ink).any():
+                    ref_panel[col_ink, x] = ref_panel[~col_ink, x].mean(axis=0)
+                else:
+                    ref_panel[col_ink, x] = global_clean
+
         clean_bg = img_bgr.copy()
+
+        # 2026-09-12 审计修复：参考扇（墨最少，但非零墨）自身的墨迹必须**写回**
+        # clean_bg —— 原实现只在复制源 ref_panel 上清理，而 clean_bg 中参考扇那一片
+        # 仍是原图（含墨）→ 雁群/岩石在该扇上残留（视觉实测确认）。
+        clean_bg[inner_t:inner_b, ref_x0:ref_x1] = ref_panel
         
         # Define sky sampling vertical range within painting ROI
         sky_t = inner_t + int((inner_b - inner_t) * 0.05)
@@ -201,11 +228,16 @@ class UniversalBackgroundExtractor:
             p_mask = dil_fg[inner_t:inner_b, px0:px1]
             if np.count_nonzero(p_mask) == 0:
                 continue
-                
-            alpha_p = cv2.GaussianBlur(p_mask.astype(np.float32) / 255.0, (25, 25), 8)[:, :, None]
-            
+
+            # 2026-09-12 审计修复：原实现只用高斯模糊 alpha（墨迹核心 alpha 仅约
+            # 0.6）→ 墨迹中心残留（石矶区实测 9.7% 暗像素）。现叠加二值核心：
+            # max(模糊渐变, 二值×0.95) —— 核心近乎完全替换，边缘仍渐变防硬边。
+            alpha_blur = cv2.GaussianBlur(p_mask.astype(np.float32) / 255.0, (25, 25), 8)
+            alpha_core = (p_mask.astype(np.float32) / 255.0) * 0.95
+            alpha_p = np.maximum(alpha_blur, alpha_core)[:, :, None]
+
             curr_slice = img_bgr[inner_t:inner_b, px0:px1]
             blended = curr_slice.astype(np.float32) * (1.0 - alpha_p) + p_adj.astype(np.float32) * alpha_p
             clean_bg[inner_t:inner_b, px0:px1] = np.clip(blended, 0, 255).astype(np.uint8)
-            
+
         return clean_bg

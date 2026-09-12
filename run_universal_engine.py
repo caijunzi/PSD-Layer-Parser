@@ -305,20 +305,23 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         if "frame" not in mname_lower and "seam" not in mname_lower and "fold" not in mname_lower:
             total_fg = cv2.bitwise_or(total_fg, m)
 
-    # 底板去墨：用**全画幅墨迹掩模**（而非仅语义层掩模）。
-    # 2026-09-12 设计缺陷修复：旧实现只抹除语义层覆盖区域，未被语义类识别的内容
-    # （如山峦/未被分割的墨迹）残留在底板上——底板不再是"纯金箔材质层"，
-    # 而设计师最需要底板的正是"干净的可用材质底"（V2 对照实证）。
-    # 折痕（屏风物理特征）不从底板抹除；未成层的墨迹改由"未分类墨迹残层"承载，
-    # 保证「底板 + 所有语义层 + 残层 = 原图内容」零丢失。
+    # 底板去墨：**双保险掩模**（2026-09-12 深度审计两轮修正后定稿）
+    #   ① 全画幅墨迹：低阈值覆盖淡墨（雁/淡影岩石等灰阶接近金地的对象；
+    #      首版用 median-12 偏高 → 淡墨雁未被覆盖，视觉残留）
+    #   ② 语义层掩模并集：被识别为对象的区域**必定**从底板抹除，不依赖灰阶阈值
+    #   两者并集后再做二遍清理（旧实现只抹语义层 → 山峦残留；只抹低阈值墨迹
+    #   → 淡墨对象残留；均被用户对照 V2 底板发现）
+    # 折痕（屏风物理特征）不从底板抹除；未成层墨迹由"未分类墨迹残层"承载。
     gray_lr = cv2.cvtColor(src_lr, cv2.COLOR_BGR2GRAY)
     bg_median = float(np.median(gray_lr))
-    ink_all = (gray_lr < bg_median - 12.0).astype(np.uint8) * 255
+    ink_gray = (gray_lr < bg_median - 20.0).astype(np.uint8) * 255
+    ink_all = cv2.bitwise_or(ink_gray, total_fg)
     seam_key = next((k for k in masks_dict if "seam" in k.lower() or "fold" in k.lower()), None)
     if seam_key is not None:
         ink_all = cv2.bitwise_and(ink_all, cv2.bitwise_not(masks_dict[seam_key]))
-    print(f"  -> [底板去墨] 全墨迹掩模覆盖 {np.count_nonzero(ink_all)/ink_all.size*100:.1f}% "
-          f"（语义层并集 {np.count_nonzero(total_fg)/total_fg.size*100:.1f}%），折痕保留")
+    print(f"  -> [底板去墨] 双保险掩模覆盖 {np.count_nonzero(ink_all)/ink_all.size*100:.1f}% "
+          f"（灰阶墨迹 {np.count_nonzero(ink_gray)/ink_gray.size*100:.1f}% ∪ 语义层 "
+          f"{np.count_nonzero(total_fg)/total_fg.size*100:.1f}%），折痕保留")
 
     clean_bg_lr, _ = bg_extractor.extract_clean_background(
         src_lr, foreground_mask=ink_all, panel_count=preset.get("panel_count")
