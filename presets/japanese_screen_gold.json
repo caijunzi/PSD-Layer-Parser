@@ -33,7 +33,8 @@
     },
     {
       "name": "04D_远山淡墨晴岚_Distant_Soft_Mountain",
-      "prompt": "faint distant mountain . pale misty hill . far mountain silhouette ."
+      "prompt": "faint distant mountain . pale misty hill . far mountain silhouette .",
+      "note": "P3 结论（2026-09-12）：淡墨远山无对象边界，SAM 三种 region 尝试均失败（外框假阳性/弥散），当前源图不可自动提取；需人工标注或更高对比度扫描件"
     },
     {
       "name": "04C_湖心独立孤石_Solitary_Water_Rock",
@@ -41,7 +42,15 @@
     },
     {
       "name": "04B_中景平渚矶岸_Midground_Shorelines",
-      "prompt": "riverbank . sand bar . shore with rocks . water edge stones ."
+      "prompt": "riverbank . sand bar . shore with rocks . water edge stones .",
+      "region": [
+        0.26,
+        0.56,
+        0.8,
+        0.9
+      ],
+      "region_boxes": 3,
+      "region_note": "中央枯树群下方的横向坡岸/沙洲（水陆过渡带）"
     },
     {
       "name": "04A_前景墨岩峭壁_Foreground_Dark_Cliffs",

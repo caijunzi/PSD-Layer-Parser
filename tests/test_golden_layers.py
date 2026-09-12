@@ -77,12 +77,19 @@ class TestGoldenScreenGold(unittest.TestCase):
             self.assertLess(b["density_min"], b["density_max"])
 
     def test_region_sam_configured(self):
-        """区域先验 SAM（P1 实证）：05A 寒林配 region 后 bbox 75.1%→21.6% 产出。"""
-        barren = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("05A_"))
-        self.assertIn("region", barren, "05A 必须配置 region（否则 SAM 弥散被拒）")
-        x0, y0, x1, y1 = barren["region"]
-        self.assertTrue(0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1)
-        self.assertGreaterEqual(int(barren.get("region_boxes", 1)), 2)
+        """区域先验 SAM（P1/P2 实证）：05A 寒林 75.1%→21.6%、04B 平渚 17.5% 产出。"""
+        for prefix in ("05A_", "04B_"):
+            cls = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith(prefix))
+            self.assertIn("region", cls, f"{prefix} 必须配置 region（否则 SAM 弥散/未命中）")
+            x0, y0, x1, y1 = cls["region"]
+            self.assertTrue(0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1)
+            self.assertGreaterEqual(int(cls.get("region_boxes", 1)), 2)
+
+    def test_distant_mountain_documented_unavailable(self):
+        """04D 远山：P3 三种 region 尝试均失败（外框假阳性/弥散）——必须无 region 且留有结论记录。"""
+        dm = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("04D_"))
+        self.assertNotIn("region", dm, "04D 不可配 region（实测产出错误层）")
+        self.assertIn("note", dm, "04D 必须保留不可行结论记录")
 
     def test_instance_split_for_flock(self):
         """雁群按实例拆分（用户要求"尽可能细致"）。"""
