@@ -196,6 +196,36 @@ class GroundedSAMProvider:
         self.backend = "fallback_rule_based"
         self.last_coverage: dict = {}
 
+    def _infer_region_sam(self, image_bgr: np.ndarray, region: tuple, split: int = 3) -> np.ndarray:
+        """区域先验 SAM：在 preset 指定的归一化 region 内多框采样，选局部候选。
+
+        用途（2026-09-12 P1 实证）：DINO 对无边界/弱语义类（寒林枯木等）
+        给出的粗框会导致 SAM 输出全画布弥散掩模（bbox 75%）。改为**由 preset
+        显式给定区域先验**（人/配置知道"树在画面中央"），在区域内采样 2-3 个子框
+        分别预测并取**面积最小的合理候选**（局部对象优先），合并后 bbox 从
+        75.1% → 21.6%，过弥散门。
+        """
+        h, w = image_bgr.shape[:2]
+        x0, y0, x1, y1 = (int(region[0] * w), int(region[1] * h),
+                          int(region[2] * w), int(region[3] * h))
+        if x1 <= x0 or y1 <= y0:
+            raise ValueError(f"非法 region: {region}")
+        if split >= 3:
+            xm = (x0 + x1) // 2
+            boxes = [[x0, y0, xm, y1], [xm, y0, x1, y1], [x0, y0, x1, y1]]
+        else:
+            boxes = [[x0, y0, x1, y1]]
+        merged = np.zeros((h, w), dtype=np.uint8)
+        for b in boxes:
+            masks, scores, _ = self.sam_predictor.predict(
+                box=np.array(b), multimask_output=True)
+            areas = [int(m.sum()) for m in masks]
+            idx = int(np.argmin(areas))  # 局部对象优先
+            if areas[idx] < (x1 - x0) * (y1 - y0) * 0.01:  # 过小则退回最高分
+                idx = int(np.argmax(scores))
+            merged = np.maximum(merged, masks[idx].astype(np.uint8) * 255)
+        return merged
+
     def _load_preset_config(self) -> dict:
         """按 preset_name 加载 preset 配置（缓存）。"""
         if getattr(self, "_preset_cfg", None) is not None:
@@ -246,6 +276,29 @@ class GroundedSAMProvider:
         rule_segmenter = UniversalSemanticSegmenter(preset=self.preset_name)
         base_masks = rule_segmenter.segment_objects(image_bgr)
         final_masks = self._map_to_bilingual_names(base_masks)
+
+        # 2.5 区域先验 SAM 覆盖（2026-09-12 P1 实证）：preset 给 class 配 region 时，
+        #     绕过 DINO 粗框（弱语义类的粗框会让 SAM 全画布弥散），
+        #     在 region 内多框采样取局部候选。产出仍走质量门/弥散门/披露。
+        region_sam_keys = []
+        if neural_masks:
+            for cls_info in (classes or []):
+                reg = cls_info.get("region")
+                if not reg:
+                    continue
+                cname = cls_info.get("name", "")
+                key = next((k for k in neural_masks if k == cname or cname in k), cname)
+                try:
+                    rm = self._infer_region_sam(
+                        image_bgr, tuple(reg), int(cls_info.get("region_boxes", 3)))
+                    if np.count_nonzero(rm > 127) == 0:
+                        continue
+                    neural_masks[key] = rm
+                    region_sam_keys.append(key)
+                    print(f"[GroundedSAMProvider] 区域先验 SAM: {key} "
+                          f"({np.count_nonzero(rm > 127):,}px, region={reg})")
+                except Exception as e:
+                    print(f"[GroundedSAMProvider] 区域先验 SAM 异常 {cname}: {e}")
 
         # 3. 神经掩模经质量门校验后置入解耦图层（未通过者保留规则掩模）
         #    神经掩模用中文图层名，规则掩模用英文键，需经同一映射才能配对比较
@@ -380,6 +433,7 @@ class GroundedSAMProvider:
         missing, rejected_all = [], []
         refine_set = {r for r in recovered}
         band_set = set(band_produced)
+        region_sam_set = set(region_sam_keys)
         for cname in configured:
             matched = [k for k in final_masks if k == cname or cname in k or k in cname]
             if matched:
@@ -389,6 +443,8 @@ class GroundedSAMProvider:
                     src = "density_refined"
                 elif mkey in band_set or cname in band_set:
                     src = "density_band"
+                elif mkey in region_sam_set or cname in region_sam_set:
+                    src = "region_sam"
                 else:
                     src = "sam"
                 produced_details.append({"name": mkey, "source": src})

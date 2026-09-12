@@ -21,7 +21,15 @@
     },
     {
       "name": "05A_前景寒林枯木_Foreground_Barren_Trees",
-      "prompt": "barren trees . pine trees . winter branches ."
+      "prompt": "barren trees . pine trees . winter branches .",
+      "region": [
+        0.36,
+        0.25,
+        0.76,
+        0.8
+      ],
+      "region_boxes": 3,
+      "region_note": "画面中央枯树群（5-6 棵，P1 实证 region+SAM bbox 75.1%→21.6%）"
     },
     {
       "name": "04D_远山淡墨晴岚_Distant_Soft_Mountain",

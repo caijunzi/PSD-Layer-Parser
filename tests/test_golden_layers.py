@@ -76,6 +76,14 @@ class TestGoldenScreenGold(unittest.TestCase):
             self.assertIn("region", b)
             self.assertLess(b["density_min"], b["density_max"])
 
+    def test_region_sam_configured(self):
+        """区域先验 SAM（P1 实证）：05A 寒林配 region 后 bbox 75.1%→21.6% 产出。"""
+        barren = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("05A_"))
+        self.assertIn("region", barren, "05A 必须配置 region（否则 SAM 弥散被拒）")
+        x0, y0, x1, y1 = barren["region"]
+        self.assertTrue(0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1)
+        self.assertGreaterEqual(int(barren.get("region_boxes", 1)), 2)
+
     def test_instance_split_for_flock(self):
         """雁群按实例拆分（用户要求"尽可能细致"）。"""
         flock = next(c for c in self.cfg["ai_semantic_classes"] if c["name"].startswith("08_"))
