@@ -1,13 +1,29 @@
 {
     "preset_name": "chinese_ink_landscape_ai",
     "display_name": "中国传统水墨山水画与屏风（AI 增强全智能分层预设）",
-    "description": "基于 Grounding DINO 文本雷达与 SAM 2 级联分割的 16K 终极高保真母版分层方案，中文新手友好。",
+    "description": "基于 Grounding DINO 文本雷达与 SAM 2 级联分割的全智能分层方案（4× 放大；输出尺寸 = 输入 × 4，非固定 16K），中文新手友好。",
     "background_mode": "paper_or_gold_screen",
     "panel_count": 6,
     "dpi": 150.0,
     "super_res_scale": 4.0,
     "target_w": 16000,
     "target_h": 7808,
+    "target_note": "target_w/h 仅为设计参照（对应 4000x1952 输入 x4）。引擎输出尺寸由 输入 x super_res_scale 决定，不强制此画幅（曾因被误读为强制 16K 而误导）。",
+    "layer_semantics": {
+        "name_mapping": {
+            "11a_brocade_outer_frame": "11A_外框装裱绫边_Brocade_Outer_Frame",
+            "11b_panel_fold_seams": "11B_屏风折痕折缝_Panel_Fold_Seams",
+            "10_cinnabar_seal": "10_长泽鱼朱砂印_Cinnabar_Seal",
+            "09_calligraphy_inscription": "09_款识诗文题跋_Calligraphy_Inscription",
+            "08_fauna_geese": "08_高空飞雁群落_Fauna_Geese",
+            "07_figures_scholar_attendants": "07_文人高士侍童_Figures_Attendants",
+            "06_architecture_pavilion": "06_水榭草堂建筑_Architecture_Pavilion",
+            "05_trees_vegetation": "05_松柏林木植被_Trees_Vegetation",
+            "04_mountains_cliffs_shorelines": "04_近景山石矶岸_Mountains_Cliffs",
+            "03_distant_mountains": "03_远山浅绛烟岚_Distant_Mountains",
+            "02_water_ripples": "02_水波微澜墨纹_Water_Ripples"
+        }
+    },
     "progressive_stages": [1.5, 2.0, 4.0],
     "deocclusion_radius": 7,
     "deocclusion_extension_px": 20,

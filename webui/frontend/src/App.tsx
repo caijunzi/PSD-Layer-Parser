@@ -207,7 +207,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('ready')
     }
-  }, [uploadInfo, selectedPreset, mode, scale, seed, profile])
+  }, [uploadInfo, selectedPreset, mode, scale, dpi, seed, profile])
 
   const resetAll = useCallback(() => {
     wsRef.current?.close()
@@ -460,7 +460,9 @@ export default function App() {
               <div className="mb-4">
                 <label className="mb-1.5 block text-xs text-neutral-400">
                   <b className="text-neutral-200">输出分辨率 (DPI)</b> · {dpi} PPI · 物理宽{' '}
-                  {(dpi > 0 ? (16000 * (scale / 4) / dpi * 25.4) / 1000 : 0).toFixed(0)} mm
+                  {uploadInfo?.dimensions && dpi > 0
+                    ? ((uploadInfo.dimensions.width * scale / dpi) * 25.4 / 1000).toFixed(0)
+                    : '—'}{' '}mm
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -488,7 +490,7 @@ export default function App() {
                   ))}
                 </div>
                 <p className="mt-1.5 text-[11px] text-neutral-600">
-                  300 DPI 出产时源图有效分辨率 {dpi > 0 && uploadInfo?.dimensions ? Math.round(uploadInfo.dimensions.width / (16000 * (scale / 4) / dpi)) : '—'} PPI
+                  {dpi} DPI 出产时源图有效分辨率 {dpi > 0 ? Math.round(dpi / scale) : '—'} PPI
                   （4× 放大极限，如实披露）
                 </p>
               </div>

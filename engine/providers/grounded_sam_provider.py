@@ -644,7 +644,15 @@ class GroundedSAMProvider:
 
         results = {}
         for cls_info in classes:
-            layer_name = cls_info.get("name", "layer")
+            # 2026-09-13 修复：预设的语义类可能用 `layer_name`（如 chinese_ink_landscape_ai）
+            # 或 `label_cn` 而非 `name`；旧写法 cls_info.get("name", "layer") 在缺 name 时
+            # 落回字面量 "layer"，导致多个未命中类同名、互相覆盖且无法追溯。
+            # 口径与 _map_to_bilingual_names 上游（configured = name or layer_name）统一。
+            layer_name = (cls_info.get("name") or cls_info.get("layer_name")
+                          or cls_info.get("label_cn") or "").strip()
+            if not layer_name:
+                _p = (cls_info.get("prompt") or "").strip()
+                layer_name = "Neural_" + ("_".join(_p.split())[:40] if _p else "unnamed")
             prompt = cls_info.get("prompt", "")
             if not prompt:
                 continue

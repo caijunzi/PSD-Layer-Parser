@@ -44,9 +44,13 @@ TH = {
     "base_dark_delta": 20.0,        # 底板 dark 判定阈值（灰阶低于 median 多少）
     "tac_limit": 310.0,             # TAC 上限（%），印刷 300% + 容差
     # 支撑/装饰层：不参与「内容承载」统计（底板是承托、外框/折痕是装饰）
-    "support_names": ("Gold_Base_Clean", "Brocade_Outer_Frame", "Panel_Fold_Seams"),
+    # 2026-09-13：改为关键词口径（兼容 Gold_Base / Fabric_Base / Base_Ground / 中文名），
+    # 否则新预设的 01_纯净画布底板_Base_Ground 会被误当内容层统计。
+    "support_names": ("Gold_Base", "Fabric_Base", "Base_Ground", "底板",
+                      "Brocade_Outer_Frame", "Panel_Fold_Seams", "外框", "折痕"),
     # 内容层（含残层）：参与重复/承载统计
-    "oracle_names": ("Gold_Base_Clean", "Brocade_Outer_Frame", "Panel_Fold_Seams"),
+    "oracle_names": ("Gold_Base", "Fabric_Base", "Base_Ground", "底板",
+                     "Brocade_Outer_Frame", "Panel_Fold_Seams", "外框", "折痕"),
 }
 
 REGIONS = {
@@ -58,6 +62,17 @@ REGIONS = {
 
 def _clean(name: str) -> str:
     return str(name).strip().rstrip("\x00")
+
+
+# 底板层判定关键词（2026-09-13 统一）：④ 与 ⑥ 必须用同一口径，
+# 否则新预设（如 01_纯净画布底板_Base_Ground）会被 ④ 判为"未找到底板"而静默跳过检查。
+BASE_KEYWORDS = ("Gold_Base", "Fabric_Base", "Base_Ground", "底板")
+
+
+def _find_base_layer(layers):
+    """按统一关键词定位底板层（与 ⑥ 同口径）。"""
+    return next((ly for ly in layers
+                 if any(k in _clean(ly.name) for k in BASE_KEYWORDS)), None)
 
 
 def _alpha(a: np.ndarray) -> np.ndarray:
@@ -167,7 +182,7 @@ def audit(psb_path: str, manifest_path: str | None = None,
         src16 = cv2.resize(src, (W, H), interpolation=cv2.INTER_AREA)
         g16 = cv2.cvtColor(src16, cv2.COLOR_RGB2GRAY)
         ink = g16 < (np.median(g16) - 12)
-        base_ly = next((ly for ly in layers if "Gold_Base_Clean" in _clean(ly.name)), None)
+        base_ly = _find_base_layer(layers)
         if base_ly is not None:
             ba = base_ly.numpy()
             base_rgb = (np.clip(ba[:, :, :3], 0, 1) * 255).astype(np.uint8) if ba.dtype != np.uint8 else ba[:, :, :3]
@@ -241,12 +256,10 @@ def audit(psb_path: str, manifest_path: str | None = None,
     #    壁布等其他品类），降级为 metrics 披露，深查由
     #    tools/calibrate_density_bands.py + 人工/金标准承担。
     d = {"passed": True, "metrics": {}, "issues": []}
-    base_ly = next((ly for ly in layers
-                    if "Gold_Base" in _clean(ly.name) or "Fabric_Base" in _clean(ly.name)
-                    or "底板" in _clean(ly.name)), None)
+    base_ly = _find_base_layer(layers)
     if base_ly is None:
         d["passed"] = False
-        d["issues"].append("缺少底板层（Gold_Base/Fabric_Base/底板 关键词均未命中）")
+        d["issues"].append("缺少底板层（Gold_Base/Fabric_Base/Base_Ground/底板 关键词均未命中）")
     else:
         import cv2
         ba = base_ly.numpy()
@@ -290,6 +303,18 @@ def audit(psb_path: str, manifest_path: str | None = None,
             if tot.get("plate_purity_ok") is False:
                 d["passed"] = False
                 d["issues"].append(f"PLATE 纯净性不合格: {str(tot.get('plate_purity_message'))[:60]}")
+            # 2026-09-13 新增：制版线（CMYK）**禁止生成内容**——LaMa 等生成式补全必须
+            # 已被确定性算法替换（run_universal_engine 的 allow_generative=False 分支）。
+            # 这是防御性门禁：一旦 plate 产物混入生成像素，此处直接拦截。
+            gen_ratio = tot.get("generated_pixel_ratio")
+            gen_deoc = tot.get("deocclusion_generative")
+            d["metrics"].update(generated_pixel_ratio=gen_ratio,
+                                deocclusion_generative=gen_deoc)
+            if gen_deoc is True or (isinstance(gen_ratio, (int, float)) and gen_ratio > 0):
+                d["passed"] = False
+                d["issues"].append(
+                    f"PLATE 含生成内容（deocclusion_generative={gen_deoc}, "
+                    f"generated_pixel_ratio={gen_ratio}）——制版线须为确定性输出")
         # 采样 K 版非空（真黑版判定：ICC 分色生效）
         try:
             big = max(content, key=lambda l: (l.bbox[2] - l.bbox[0]) * (l.bbox[3] - l.bbox[1]))
@@ -303,6 +328,18 @@ def audit(psb_path: str, manifest_path: str | None = None,
             pass
     else:
         d["metrics"]["color_mode"] = "rgb（design 线，plate 项不适用）"
+        # design 线允许生成式补全（LaMa）；此处仅**披露**生成内容占比，
+        # 供人工确认该产物能否直接用于制版（若要制版应改走 plate 线）。
+        if manifest_path and os.path.isfile(manifest_path):
+            try:
+                _tot = json.load(open(manifest_path, encoding="utf-8")).get("totals", {})
+                d["metrics"]["generated_pixel_ratio"] = _tot.get("generated_pixel_ratio")
+                d["metrics"]["deocclusion_engine"] = _tot.get("deocclusion_engine")
+                d["metrics"]["deocclusion_generative"] = _tot.get("deocclusion_generative")
+                if _tot.get("deocclusion_generative") is True:
+                    d["metrics"]["note"] = "design 线含生成式补全；如需制版请走 plate 线（确定性）"
+            except Exception:
+                pass
     dims["⑦ plate 合规"] = d
 
     # ⑧ manifest 一致性
