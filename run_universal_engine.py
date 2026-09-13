@@ -298,6 +298,49 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                     db=db_mgr,
                 )
 
+                # 6. Stage 5.2 主动学习：把不确定类目（confidence < 0.7）写入待审队列
+                #    前端每 3 秒轮询 GET /api/adaptive/pending-feedbacks，读到即弹窗请求人审。
+                #    这是「生产端」——没有这段，待审队列永远为空、弹窗永不触发。
+                try:
+                    import os as _os, time as _time
+                    from pathlib import Path as _Path
+                    from engine.adaptive.active_learner import (
+                        identify_uncertain_categories,
+                        request_human_feedback,
+                    )
+
+                    _detections = [
+                        {
+                            "category_id": c.get("category_id"),
+                            "confidence": float(c.get("confidence") or 0.0),
+                            "prompt": c.get("name_zh") or "",
+                        }
+                        for c in (selected_db or [])
+                        if c.get("category_id")
+                    ]
+                    _uncertain = identify_uncertain_categories(
+                        {"detections": _detections}, confidence_threshold=0.7
+                    )
+
+                    if _uncertain:
+                        # task_id：WebUI 调用时可经 TASK_ID 传入；否则由输入名+时间戳派生
+                        _task_id = _os.environ.get("TASK_ID") or (
+                            f"engine_{_Path(input_path).stem}_{int(_time.time())}"
+                        )
+                        _fb_id = request_human_feedback(
+                            uncertain_categories=_uncertain,
+                            task_id=_task_id,
+                            image_path=input_path,
+                        )
+                        print(
+                            f"[Adaptive] 已提交 {len(_uncertain)} 个不确定类目待人审"
+                            f"（request={_fb_id}）"
+                        )
+                    else:
+                        print("[Adaptive] 无不确定类目（选中类目 confidence 均 ≥0.7）")
+                except Exception as al_err:
+                    print(f"[Adaptive] 主动学习入队失败（不影响主流程）: {al_err}")
+
                 # 5. 归档 episode（Stage 1.5）：记录本次「图像 → 材质判别 → 类目选择」交互，
                 #    供 Stage 2+ 反馈学习 / 自动进化消费。默认仅 JSONL 追加，不改动 SQLite 词库，
                 #    因此失败也不影响主流程（单独 try 包裹）。
@@ -382,6 +425,52 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     for mname, mdata in sorted(masks_dict.items()):
         print(f"     * {mname:<38}: {np.count_nonzero(mdata):>8} 像素")
     t_step1 = time.time() - t0
+
+    # Stage 3 学习闭环（影子模式）+ Stage 5.2 检出级不确定类目入队。
+    # 必须放在分割之后：grounded_sam.dino_detections（检出 prompt/boxes/logits）此时才有值，
+    # 归因与「检出置信度」判定都依赖它。全程 try 包裹，失败不影响主流程。
+    try:
+        from pathlib import Path as _P2
+
+        _dino_dets = getattr(grounded_sam, "dino_detections", None) or []
+
+        # 1) Stage 3：从本次检出生成权重调整建议（只生成、不落库 = 影子模式）
+        from engine.adaptive.learner import SemanticLearner
+
+        _learn = SemanticLearner().learn_from_episode(
+            {
+                "episode_id": f"engine_{_P2(input_path).stem}",
+                "category_ids": [c.get("category_id") or c.get("name")
+                                 for c in preset.get("ai_semantic_classes", [])],
+                "material_family": preset_name,
+                "dino_detections": _dino_dets,
+            }
+        )
+        _n_attr = len(_learn.get("attributions") or [])
+        _n_adj = sum(len(v) for v in (_learn.get("weight_adjustments") or {}).values())
+        print(f"[Adaptive] Stage 3 学习（影子模式）：{_n_attr} 条归因、{_n_adj} 条权重建议（未落库）")
+
+        # 2) Stage 5.2：检出置信度 <0.7 的类目 → 写入待审队列（前端弹窗人审）
+        from engine.adaptive.active_learner import (
+            identify_uncertain_categories,
+            request_human_feedback,
+        )
+
+        _uncertain = identify_uncertain_categories(
+            {"detections": _dino_dets}, confidence_threshold=0.7
+        )
+        if _uncertain:
+            _task_id2 = os.environ.get("TASK_ID") or (
+                f"engine_{_P2(input_path).stem}_{int(time.time())}"
+            )
+            _fb2 = request_human_feedback(
+                uncertain_categories=_uncertain,
+                task_id=_task_id2,
+                image_path=input_path,
+            )
+            print(f"[Adaptive] 检出级不确定类目 {len(_uncertain)} 个已入队待人审（request={_fb2}）")
+    except Exception as ln_err:
+        print(f"[Adaptive] Stage 3/5.2 后置处理失败（不影响主流程）: {ln_err}")
 
     # -------------------------------------------------------------
     # -------------------------------------------------------------

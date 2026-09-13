@@ -780,7 +780,9 @@ class GroundedSAMProvider:
                     "logits": logits.cpu().numpy().tolist() if hasattr(logits, "cpu") else logits.tolist(),
                     "num_boxes": len(boxes),
                     "instance_split": instance_split,
-                    # 后续在质量门/弥散门阶段会填充 accepted / reject_reason
+                    # 质量门/弥散门阶段会填充 quality_gate_passed / quality_gate_reason
+                    # 与 diffuse_gate_passed / diffuse_gate_reason（供 Stage 3 归因消费，
+                    # 字段名为 engine/adaptive/attribution.py 的约定，勿改）
                 })
             except Exception as e:
                 print(f"[GroundedSAMProvider] Error predicting class '{layer_name}': {e}")
