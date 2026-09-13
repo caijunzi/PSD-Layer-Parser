@@ -39,6 +39,8 @@ def archive_episode(
     confidence: float = 0.0,
     notes: str = "",
     episode_path: str = DEFAULT_EPISODE_PATH,
+    update_index: bool = True,
+    audit_8d: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     归档一次自适应语义交互。
@@ -52,6 +54,8 @@ def archive_episode(
         confidence:     材质判别置信度
         notes:          自由文本备注
         episode_path:   episode 日志路径（默认 webui/data/adaptive_episodes.jsonl）
+        update_index:   是否更新 CBR 指纹索引（Stage 4，默认 True）
+        audit_8d:       审计 8 维数据（用于判断 audit_passed，可选）
 
     Returns:
         episode id（形如 ep_20260913T..._a1b2c3d4e5f6）
@@ -85,6 +89,33 @@ def archive_episode(
     with _lock:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    
+    # Stage 4：归档后触发索引更新（CBR 案例推理库）
+    if update_index and fingerprint and "embedding" in fingerprint:
+        try:
+            from .episode_indexer import get_default_indexer
+            import numpy as np
+            
+            # 提取指纹向量（PCA128）
+            embedding = fingerprint.get("embedding")
+            if embedding is not None and len(embedding) == 128:
+                # 判断是否通过审计（lost_ratio < 0.05 为通过）
+                audit_passed = False
+                if audit_8d:
+                    lost_ratio = audit_8d.get("lost_ratio", 1.0)
+                    audit_passed = (lost_ratio < 0.05)
+                
+                # 更新索引
+                indexer = get_default_indexer()
+                indexer.add(
+                    task_id=record["episode_id"],
+                    fingerprint=np.array(embedding, dtype=np.float32),
+                    audit_passed=audit_passed
+                )
+                indexer.save()
+        except Exception as e:
+            # 索引更新失败不影响归档主流程
+            print(f"⚠️ 索引更新失败（{e}），归档已完成")
 
     return record["episode_id"]
 

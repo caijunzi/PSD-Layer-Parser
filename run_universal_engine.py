@@ -245,6 +245,38 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 material_family, mat_conf = classify_material_family(fp)
                 print(f"[Adaptive] 材质判别: {material_family}（置信度 {mat_conf:.2f}）")
 
+                # 2.5. Stage 4：CBR 案例推理检索（复用相似历史图的已验证参数）
+                cbr_hit = None
+                try:
+                    from engine.adaptive.cbr_retriever import retrieve_similar_episode, get_cbr_hit_info
+                    from engine.adaptive.episode_indexer import get_default_indexer
+                    from pathlib import Path
+                    
+                    # 获取 episode 归档目录（默认 webui/data/episodes/）
+                    engine_root = Path(__file__).resolve().parent
+                    episodes_dir = engine_root / "webui" / "data" / "episodes"
+                    
+                    # 检索最相似的历史 episode
+                    indexer = get_default_indexer()
+                    if len(indexer) > 0:  # 有历史索引才检索
+                        cbr_hit = retrieve_similar_episode(
+                            fingerprint=fp.get("embedding"),
+                            indexer=indexer,
+                            episodes_dir=episodes_dir,
+                            min_similarity=0.7
+                        )
+                        
+                        if cbr_hit:
+                            cbr_info = get_cbr_hit_info(cbr_hit)
+                            print(f"[Adaptive] {cbr_info}")
+                            print(f"[Adaptive] 复用历史参数（冷启动加速）")
+                        else:
+                            print(f"[Adaptive] 无相似历史图（相似度阈值 0.7），从零选择类目")
+                    else:
+                        print(f"[Adaptive] 索引为空（首次运行），从零选择类目")
+                except Exception as cbr_err:
+                    print(f"[Adaptive] CBR 检索失败（降级到从零选择）: {cbr_err}")
+
                 # 3. 类目选择：DB 亲和度 Top-K（+ 强制核心类目 seal/calligraphy/repair_marks）
                 #    注意：DB 的 category_id 命名空间 ≠ preset ai_semantic_classes[].name，
                 #    桥接（preset 名 ↔ DB id）是后续阶段工作；Stage 1 以 auto 取候选，
