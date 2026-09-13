@@ -126,6 +126,10 @@ class GroundedSAMProvider:
         self.dino_model = None
         self.sam_predictor = None
         self.backend = "fallback_rule_based"
+        
+        # Stage 3（反馈闭环）：保存检测信息供归因使用
+        # 每次检测后填充：[{layer_name, prompt, boxes, logits, accepted, reject_reason}, ...]
+        self.dino_detections: list[dict] = []
 
         # 加入 sys.path 以支持本地模块加载
         import sys
@@ -384,7 +388,7 @@ class GroundedSAMProvider:
                 print(f"[GroundedSAMProvider] 墨点实例化异常 {cname}: {e}")
 
         # 3. 神经掩模经质量门校验后置入解耦图层（未通过者保留规则掩模）
-        #    神经掩模用中文图层名，规则掩模用英文键，需经同一映射才能配对比较
+        #    神经掩模用中文图层名,规则掩模用英文键，需经同一映射才能配对比较
         rule_final = final_masks
         accepted, rejected = [], []
         if neural_masks:
@@ -395,6 +399,15 @@ class GroundedSAMProvider:
                     accepted.append(k)
                 else:
                     rejected.append(f"{k}（{reason}）")
+                
+                # Stage 3（反馈闭环）：填充质量门判定结果到检测记录
+                # 找到对应的检测记录（按 layer_name 匹配）
+                for det in self.dino_detections:
+                    if det["layer_name"] == k:
+                        det["quality_gate_passed"] = ok
+                        if not ok:
+                            det["quality_gate_reason"] = reason
+                        break
 
         # 3.5 实例拆分一致性：启用 instance_split 的类不保留合并层，
         #     否则规则 fallback 的合并掩模会与单实例层重复占用同一内容。
@@ -425,6 +438,14 @@ class GroundedSAMProvider:
             if reason:
                 self.rejected_masks[k] = final_masks.pop(k)
                 diffuse_rejected.append(f"{k}（{reason}）")
+                
+                # Stage 3（反馈闭环）：填充弥散门判定结果到检测记录
+                for det in self.dino_detections:
+                    if det["layer_name"] == k:
+                        det["diffuse_gate_passed"] = False
+                        det["diffuse_gate_reason"] = reason
+                        break
+        
         if diffuse_rejected:
             print(f"[GroundedSAMProvider] ⚠️  弥散门拒绝 {len(diffuse_rejected)} 个层（不产出）：")
             for r in diffuse_rejected:
@@ -643,6 +664,9 @@ class GroundedSAMProvider:
             print("[GroundedSAMProvider] preset 未配置 ai_semantic_classes，跳过神经检测（仅规则引擎）")
             return {}
 
+        # Stage 3（反馈闭环）：清空检测记录，为本次推理重新收集
+        self.dino_detections = []
+        
         results = {}
         for cls_info in classes:
             # 2026-09-13 修复：预设的语义类可能用 `layer_name`（如 chinese_ink_landscape_ai）
@@ -747,6 +771,17 @@ class GroundedSAMProvider:
                 elif np.any(layer_mask > 0):
                     results[layer_name] = layer_mask
                     print(f"[GroundedSAMProvider] Neural segmented layer '{layer_name}': {np.sum(layer_mask > 0)} px")
+                
+                # Stage 3（反馈闭环）：记录检测信息供归因使用
+                self.dino_detections.append({
+                    "layer_name": layer_name,
+                    "prompt": prompt,
+                    "boxes": boxes.cpu().numpy().tolist() if hasattr(boxes, "cpu") else boxes.tolist(),
+                    "logits": logits.cpu().numpy().tolist() if hasattr(logits, "cpu") else logits.tolist(),
+                    "num_boxes": len(boxes),
+                    "instance_split": instance_split,
+                    # 后续在质量门/弥散门阶段会填充 accepted / reject_reason
+                })
             except Exception as e:
                 print(f"[GroundedSAMProvider] Error predicting class '{layer_name}': {e}")
 

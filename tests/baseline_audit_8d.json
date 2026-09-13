@@ -1,0 +1,52 @@
+{
+  "task_20260912_132516_371e55": {
+    "lost_ratio": 0.0,
+    "rmse_raw": 23.83,
+    "rmse_lowfreq": 17.21,
+    "plate_purity_ok": true,
+    "tac_max_pct": 300.0,
+    "n_layers": 42,
+    "total_size_mb": 0.0,
+    "backend": "unknown"
+  },
+  "task_20260913_122144_d023f4": {
+    "lost_ratio": 0.0,
+    "rmse_raw": 4.84,
+    "rmse_lowfreq": 0.7,
+    "plate_purity_ok": true,
+    "tac_max_pct": 300.0,
+    "n_layers": 10,
+    "total_size_mb": 0.0,
+    "backend": "unknown"
+  },
+  "task_20260913_120555_b2b831": {
+    "lost_ratio": 0.0,
+    "rmse_raw": 11.48,
+    "rmse_lowfreq": 5.22,
+    "plate_purity_ok": true,
+    "tac_max_pct": 0.0,
+    "n_layers": 9,
+    "total_size_mb": 0.0,
+    "backend": "unknown"
+  },
+  "task_20260913_103835_3cfc3b": {
+    "lost_ratio": 0.0,
+    "rmse_raw": 23.83,
+    "rmse_lowfreq": 17.21,
+    "plate_purity_ok": true,
+    "tac_max_pct": 300.0,
+    "n_layers": 42,
+    "total_size_mb": 0.0,
+    "backend": "unknown"
+  },
+  "task_20260912_122614_8ac9e5": {
+    "lost_ratio": 0.0,
+    "rmse_raw": 16.03,
+    "rmse_lowfreq": 8.12,
+    "plate_purity_ok": true,
+    "tac_max_pct": 252.16,
+    "n_layers": 5,
+    "total_size_mb": 0.0,
+    "backend": "unknown"
+  }
+}

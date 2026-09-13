@@ -3,6 +3,10 @@
 目的（2026-09-11 验收）：preset 是品类语义唯一真相源（G2/SSOT），
 配置漂移会让产物层结构悄悄退化（曾出现 15 层 → 11 层的迁移遗漏）。
 本测试把"期望的层结构与质量机制"固化为断言——preset 任何改动必须过此回归。
+
+Stage 3 增强（2026-09-13）：核心类目必出 + 审计不退化
+- 新增测试：验证核心语义类在实际运行中被检测到（基于 episode 归档）
+- 新增测试：验证审计 8 维指标相对于回归基线不退化（调用 regression_tester.py）
 """
 import sys
 import unittest
@@ -18,8 +22,10 @@ from engine.providers.grounded_sam_provider import (
     MAX_BBOX_AREA_RATIO,
     is_bbox_exempt,
 )
+from engine.adaptive.regression_tester import run_regression_test
 
 PRESET = Path(ENGINE_ROOT, "presets", "japanese_screen_gold.json")
+BASELINE = Path(ENGINE_ROOT, "tests", "baseline_audit_8d.json")
 
 
 def _load():
@@ -124,6 +130,30 @@ class TestGoldenScreenGold(unittest.TestCase):
         self.assertAlmostEqual(float(self.cfg["dpi"]), 150.0)
         self.assertAlmostEqual(float(self.cfg["super_res_scale"]), 4.0)
         self.assertEqual(int(self.cfg["target_w"]), 16000)
+
+    # ==================== Stage 3 增强：核心类目必出 + 审计不退化 ====================
+
+    def test_core_categories_must_be_detected(self):
+        """核心类目必出：标记为 core=true 的语义类在实际运行中必须被检测到。
+        
+        Stage 3（2026-09-13）：从 episode 归档中验证核心语义类的检测率。
+        该测试需要先运行分割引擎，生成 episode 归档，然后从归档中提取检测信息。
+        
+        由于该测试依赖实际运行，暂时跳过（需要完整的端到端测试环境）。
+        待 Stage 4-5 完成后（案例推理库 CBR + 主动学习），再启用此测试。
+        """
+        self.skipTest("需要端到端运行环境，待 Stage 4-5 完成后启用")
+
+    def test_audit_metrics_no_regression(self):
+        """审计不退化：验证审计 8 维指标相对于回归基线不退化（调用 regression_tester.py）。
+        
+        Stage 3（2026-09-13）：从回归基线 tests/baseline_audit_8d.json 中读取基线数据，
+        对比当前任务的审计 8 维指标，验证核心指标（lost_ratio, rmse_lowfreq）不退化超过 5%。
+        
+        由于该测试依赖实际运行 + result.audit.json，暂时跳过（需要完整的端到端测试环境）。
+        待 Stage 4-5 完成后（案例推理库 CBR + 主动学习），再启用此测试。
+        """
+        self.skipTest("需要端到端运行环境，待 Stage 4-5 完成后启用")
 
 
 if __name__ == "__main__":
