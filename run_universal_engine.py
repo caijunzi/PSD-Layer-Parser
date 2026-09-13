@@ -210,6 +210,94 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     preset = load_preset(preset_name)
+    
+    # -------------------------------------------------------------
+    # Adaptive Semantics: Material Classification & Category Selection
+    # 根据环境变量 ADAPTIVE_MODE 决定是否启用自适应语义（Stage 1）
+    # -------------------------------------------------------------
+    from engine.schemas.presets import get_adaptive_mode
+    adaptive_mode = get_adaptive_mode(preset)  # "locked" | "auto" | "hybrid"
+
+    # 仅当显式启用 auto/hybrid 时才做自适应类目选择；
+    # 默认 "locked" 保持 preset.ai_semantic_classes 为唯一真相（SSOT），不触碰。
+    if adaptive_mode in ("auto", "hybrid"):
+        print(f"[Adaptive] 自适应语义已启用: {adaptive_mode.upper()}")
+        try:
+            from engine.adaptive.fingerprint import extract_fingerprint
+            from engine.adaptive.material_classifier import classify_material_family
+            from engine.adaptive.category_selector import (
+                select_categories,
+                merge_into_preset_format,
+            )
+            from engine.adaptive.db_manager import create_db_manager
+            from engine.adaptive.episode_archiver import archive_episode
+
+            # 读取源图像（提前读取用于指纹提取）
+            src_lr_temp = imread_unicode(input_path)
+            if src_lr_temp is not None:
+                # 1. 提取图像指纹（84 维原始特征 → 128D PCA embedding）
+                fp = extract_fingerprint(
+                    src_lr_temp,
+                    background_mode=preset.get("background_mode", "paper"),
+                )
+
+                # 2. 材质家族判别（规则方式，Stage 1）
+                material_family, mat_conf = classify_material_family(fp)
+                print(f"[Adaptive] 材质判别: {material_family}（置信度 {mat_conf:.2f}）")
+
+                # 3. 类目选择：DB 亲和度 Top-K（+ 强制核心类目 seal/calligraphy/repair_marks）
+                #    注意：DB 的 category_id 命名空间 ≠ preset ai_semantic_classes[].name，
+                #    桥接（preset 名 ↔ DB id）是后续阶段工作；Stage 1 以 auto 取候选，
+                #    再由 merge_into_preset_format 转成 preset 格式并保留 preset 元数据。
+                db_mgr = create_db_manager()
+                selected_db = select_categories(
+                    fp,
+                    material_family,
+                    str(db_mgr.db_path),
+                    mode="auto",
+                )
+
+                # 4. 合并进 preset 格式（auto 替换 / hybrid 补充）
+                merged = merge_into_preset_format(
+                    preset.get("ai_semantic_classes", []),
+                    selected_db,
+                    adaptive_mode,
+                )
+
+                # 5. 归档 episode（Stage 1.5）：记录本次「图像 → 材质判别 → 类目选择」交互，
+                #    供 Stage 2+ 反馈学习 / 自动进化消费。默认仅 JSONL 追加，不改动 SQLite 词库，
+                #    因此失败也不影响主流程（单独 try 包裹）。
+                _cat_ids = [(c.get("category_id") or c.get("name")) for c in (merged or [])]
+
+                if merged:
+                    # 更新 preset 的 ai_semantic_classes（下游 segment_objects 直接消费）
+                    preset["ai_semantic_classes"] = merged
+                    print(f"[Adaptive] 类目已更新: {len(merged)} 个（{adaptive_mode}）")
+                    for cat in merged[:5]:  # 只显示前 5 个
+                        print(f"     * {cat.get('name')}")
+                    if len(merged) > 5:
+                        print(f"     ... 以及其他 {len(merged) - 5} 个类目")
+                    _outcome = "selected"
+                else:
+                    print("[Adaptive] 未选出类目，保持原 preset 配置")
+                    _outcome = "fallback_to_preset"
+
+                try:
+                    epid = archive_episode(
+                        material_family=material_family,
+                        category_ids=_cat_ids,
+                        fingerprint=fp,
+                        image_path=input_path,
+                        outcome=_outcome,
+                        confidence=float(mat_conf),
+                        notes=f"mode={adaptive_mode}; n_selected={len(_cat_ids)}",
+                    )
+                    print(f"[Adaptive] episode 已归档: {epid}")
+                except Exception as ae:
+                    print(f"[Adaptive] episode 归档失败（不影响主流程）: {ae}")
+        except Exception as e:
+            print(f"[Adaptive] 自适应语义失败（降级到原 preset）: {e}")
+    
     # ⚠️ cv2.imread 对含非 ASCII 字符的路径（如中文工作区）会静默返回 None——
     # 用户从 IDE / 一键 bat 传绝对路径是常态，必须走 Unicode 安全读取
     src_lr = imread_unicode(input_path)
@@ -225,6 +313,17 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     target_dpi = float(dpi) if dpi is not None else float(preset.get("dpi", 150.0))
     print(f"[Engine] Target Output Resolution: {out_w} x {out_h} (Scale: {out_w/w_lr:.2f}x)")
     print(f"[Engine] Print Resolution Target: {target_dpi:.1f} PPI (Physical: {out_w/target_dpi*25.4:.1f} x {out_h/target_dpi*25.4:.1f} mm)")
+
+    # 2026-09-13：显式披露 preset 声明的目标画幅与实际输出的关系。
+    # preset.target_w/h 是**设计参照**（如 16000x7808 对应 4000x1952 输入 x4），
+    # 引擎的输出尺寸恒为 输入 x 倍率，不强制该画幅——此处打印以免被误读为强制 16K。
+    _decl_w, _decl_h = preset.get("target_w"), preset.get("target_h")
+    if _decl_w and _decl_h:
+        if (int(_decl_w), int(_decl_h)) != (out_w, out_h):
+            print(f"[Engine] 注意：preset 声明目标画幅 {int(_decl_w)}x{int(_decl_h)} 与实际输出 "
+                  f"{out_w}x{out_h} 不一致——输出尺寸 = 输入 x 倍率（target_w/h 仅设计参照，不强制）")
+        else:
+            print(f"[Engine] preset 声明目标画幅 {int(_decl_w)}x{int(_decl_h)} 与实际输出一致")
 
     # -------------------------------------------------------------
     # Step 1: Grounded SAM / Universal Semantic Object Segmentation
@@ -603,11 +702,17 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # 支撑层补录（2026-09-12 审计修复）：底板由 psb_builder 单独添加，
     # 不在 sorted_layers 中，导致 manifest 层清单与实际 PSB 差 1 层
     # （实测 42 vs 43）。此处补录，保证「manifest 层清单 == PSB 实际层」。
+    # 补全语义与 deocclusion 一致（manifest.py:184）：生成引擎（LaMa）计为生成
+    # 内容；确定性引擎（Telea/NS）走 deterministic_fill（追溯不判生成），
+    # 否则 PLATE 线纯净性校验会误判底板为生成内容（实测回归，已修正）。
     _declared = {getattr(r, "name", "") for r in man.layers}
     for _sup_name in (bg_name,):
         if _sup_name and _sup_name not in _declared:
             _sup_rec = LayerGenerationRecord(name=_sup_name)
-            _sup_rec.add_reason(f"support_background({inpaint_engine})")
+            if getattr(inpaint_provider, "is_generative", False):
+                _sup_rec.add_reason(f"support_background({inpaint_engine})")
+            else:
+                _sup_rec.add_deterministic_fill(f"support_background({inpaint_engine})")
             _sup_rec.recon_pixel_count = int(total_recon_px)
             man.layers.append(_sup_rec)
 

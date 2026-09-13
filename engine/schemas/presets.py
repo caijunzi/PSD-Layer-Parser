@@ -66,3 +66,27 @@ def match_layer_attributes(preset: dict[str, Any], layer_name: str) -> dict[str,
                 if key in rule:
                     applied[key] = rule[key]
     return applied
+
+
+def get_adaptive_mode(preset: dict[str, Any]) -> str:
+    """
+    获取自适应语义模式（Stage 1）
+    
+    Returns:
+        "locked" / "auto" / "hybrid"（默认 "locked"）
+    """
+    mode = preset.get("mode", "locked")
+    if mode not in ("locked", "auto", "hybrid"):
+        return "locked"
+    return mode
+
+
+def get_auto_evolve(preset: dict[str, Any]) -> bool:
+    """
+    获取自动进化开关（Stage 3）
+    
+    Returns:
+        布尔值（默认 False）
+    """
+    return bool(preset.get("auto_evolve", False))
+

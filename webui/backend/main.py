@@ -23,6 +23,7 @@ from api.process import router as process_router
 from api.download import router as download_router
 from api.presets import router as presets_router
 from api.history import router as history_router
+from api.adaptive import router as adaptive_router
 from ws.progress import router as ws_router
 
 # 启动前确保数据目录存在
@@ -61,6 +62,7 @@ app.include_router(process_router, prefix="/api")
 app.include_router(download_router, prefix="/api")
 app.include_router(presets_router, prefix="/api")
 app.include_router(history_router, prefix="/api")
+app.include_router(adaptive_router, prefix="/api")
 
 # WebSocket 路由
 app.include_router(ws_router)
