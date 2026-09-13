@@ -195,16 +195,34 @@ def merge_semantic_classes(
         raise ValueError(f"无效的 mode: {mode}")
 
 
-def db_category_to_preset_class(cat: Dict[str, Any]) -> Dict[str, Any]:
+def db_category_to_preset_class(cat: Dict[str, Any], db: Optional[DBManager] = None) -> Dict[str, Any]:
     """
     将 DB 类目（select_categories 返回格式）转换为 preset ai_semantic_classes 兼容格式。
 
     preset 的 ai_semantic_classes 是 SSOT，下游 grounded_sam_provider.segment_objects
     按 `name` / `prompt` 键做图层命名与检测；DB 类目使用 name_zh/name_en/prompts，需桥接。
+    
+    Stage 2：优先查询 category_preset_aliases 表，获取符合 preset 约定的别名。
     """
-    name_zh = cat.get("name_zh") or ""
-    name_en = cat.get("name_en") or ""
-    name = f"{name_zh}_{name_en}" if name_en else (name_zh or cat.get("category_id") or "")
+    # Stage 2：查询 preset 别名（优先级最高）
+    name = None
+    if db and cat.get("category_id"):
+        try:
+            result = db.execute(
+                "SELECT preset_name FROM category_preset_aliases WHERE category_id = ? ORDER BY priority ASC LIMIT 1",
+                (cat["category_id"],)
+            )
+            row = result.fetchone()
+            if row:
+                name = row[0]
+        except Exception:
+            pass  # 降级到 name_zh_name_en
+    
+    # 降级：name_zh_name_en 拼接
+    if not name:
+        name_zh = cat.get("name_zh") or ""
+        name_en = cat.get("name_en") or ""
+        name = f"{name_zh}_{name_en}" if name_en else (name_zh or cat.get("category_id") or "")
 
     prompts = cat.get("prompts") or []
     prompt = prompts[0].get("text", "") if prompts else ""
@@ -226,7 +244,8 @@ def db_category_to_preset_class(cat: Dict[str, Any]) -> Dict[str, Any]:
 def merge_into_preset_format(
     preset_classes: List[Dict[str, Any]],
     selected_db: List[Dict[str, Any]],
-    mode: str
+    mode: str,
+    db: Optional[DBManager] = None
 ) -> List[Dict[str, Any]]:
     """
     将 DB 选出的类目合并进 preset 的 ai_semantic_classes（保持 preset 为 SSOT）。
@@ -240,12 +259,13 @@ def merge_into_preset_format(
         preset_classes: 原始 preset ai_semantic_classes（list of dict）
         selected_db:    select_categories(..., mode="auto") 返回的 DB 类目
         mode:           "auto" / "hybrid"
+        db:             DBManager 实例（用于查询 preset 别名）
 
     Returns:
         list of dict（preset 格式：至少含 name / prompt）
     """
     if mode == "auto":
-        return [db_category_to_preset_class(c) for c in selected_db]
+        return [db_category_to_preset_class(c, db) for c in selected_db]
 
     # hybrid：保留 preset，补充未覆盖的 DB 类目
     preset_names_lower = [(pc.get("name") or "").lower() for pc in preset_classes]
@@ -254,5 +274,5 @@ def merge_into_preset_format(
         nz = (c.get("name_zh") or "").lower()
         if nz and any(nz in pn for pn in preset_names_lower):
             continue  # 已被 preset 覆盖，跳过避免重复检测
-        result.append(db_category_to_preset_class(c))
+        result.append(db_category_to_preset_class(c, db))
     return result

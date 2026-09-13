@@ -258,10 +258,12 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 )
 
                 # 4. 合并进 preset 格式（auto 替换 / hybrid 补充）
+                #    Stage 2：传递 db_mgr 让转换函数查询 preset 别名表
                 merged = merge_into_preset_format(
                     preset.get("ai_semantic_classes", []),
                     selected_db,
                     adaptive_mode,
+                    db=db_mgr,
                 )
 
                 # 5. 归档 episode（Stage 1.5）：记录本次「图像 → 材质判别 → 类目选择」交互，
