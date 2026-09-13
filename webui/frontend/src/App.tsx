@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+// Stage 5.3：Auto-Tune 卡片与人审弹窗抽为独立组件
+import AutoTuneCard, { type AutoTuneSuggestionData } from './components/AutoTuneSuggestion'
+import CategoryFeedbackModal, {
+  type FeedbackRequest,
+  type FeedbackAction,
+} from './components/CategoryFeedbackModal'
+
 /* ===== 类型 ===== */
 type PresetInfo = {
   name: string
@@ -24,19 +31,6 @@ type OutputFile = {
   filename: string
   size: number
   download_url: string
-}
-
-type AutoTuneSuggestion = {
-  image_size: [number, number]
-  global_percentiles: Record<string, number>
-  regions: Array<{ region: [number, number, number, number]; score: number; blocks: number }>
-  density_bands: Array<{
-    label: string
-    region?: [number, number, number, number]
-    density_min: number
-    density_max: number
-    coverage: number
-  }>
 }
 
 type WsMessage = {
@@ -100,7 +94,7 @@ export default function App() {
   const logBoxRef = useRef<HTMLDivElement>(null)
 
   // Auto-Tune 建议状态
-  const [autoTuneSuggestion, setAutoTuneSuggestion] = useState<AutoTuneSuggestion | null>(null)
+  const [autoTuneSuggestion, setAutoTuneSuggestion] = useState<AutoTuneSuggestionData | null>(null)
   const [autoTuneLoading, setAutoTuneLoading] = useState(false)
   const [autoTuneError, setAutoTuneError] = useState<string | null>(null)
   const [autoTuneCollapsed, setAutoTuneCollapsed] = useState(false)
@@ -211,6 +205,77 @@ export default function App() {
       setApplyingAutoTune(false)
     }
   }, [autoTuneSuggestion, selectedPreset])
+
+  /* ===== Stage 5.2 主动学习：轮询待审类目（3 秒） ===== */
+  const [pendingRequest, setPendingRequest] = useState<FeedbackRequest | null>(null)
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false)
+  const [submittingFeedback, setSubmittingFeedback] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setInterval(async () => {
+      // 弹窗打开时暂停轮询，避免打断用户操作
+      if (showFeedbackModal) return
+      try {
+        const r = await fetch('/api/adaptive/pending-feedbacks?limit=1')
+        if (!r.ok) return
+        const body = await r.json()
+        const list: FeedbackRequest[] = body.pending_feedbacks ?? []
+        if (!cancelled && list.length > 0) {
+          setPendingRequest(list[0])
+          setShowFeedbackModal(true)
+        }
+      } catch {
+        // 轮询失败静默处理（后端未启用或无待审数据），不打扰用户
+      }
+    }, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [showFeedbackModal])
+
+  /* ===== 提交人审反馈 ===== */
+  const submitCategoryFeedback = useCallback(
+    async (categoryId: string, action: FeedbackAction, userData?: Record<string, unknown>) => {
+      if (!pendingRequest) return
+      setSubmittingFeedback(true)
+      try {
+        const fd = new URLSearchParams({
+          feedback_request_id: pendingRequest.feedback_request_id,
+          user_action: action,
+        })
+        if (userData) fd.append('user_data', JSON.stringify(userData))
+
+        const r = await fetch(
+          `/api/adaptive/categories/${encodeURIComponent(categoryId)}/feedback`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: fd,
+          },
+        )
+        const body = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(body.detail ?? `HTTP ${r.status}`)
+
+        // 该类目已裁决：从待审列表移除；全部处理完才关闭弹窗
+        const rest = (pendingRequest.uncertain_categories ?? []).filter(
+          (c) => c.category_id !== categoryId,
+        )
+        if (rest.length === 0) {
+          setShowFeedbackModal(false)
+          setPendingRequest(null)
+        } else {
+          setPendingRequest({ ...pendingRequest, uncertain_categories: rest })
+        }
+      } catch (e) {
+        alert(`❌ 提交反馈失败: ${e instanceof Error ? e.message : String(e)}`)
+      } finally {
+        setSubmittingFeedback(false)
+      }
+    },
+    [pendingRequest],
+  )
 
   /* ===== 提交处理 + WebSocket ===== */
   const startProcess = useCallback(async () => {
@@ -444,103 +509,16 @@ export default function App() {
         {/* 配置区（已上传且未在处理中） */}
         {ready && (
           <>
-            {/* Auto-Tune 建议卡片 */}
+            {/* Auto-Tune 建议卡片（Stage 5.3 抽出为组件） */}
             {(autoTuneLoading || autoTuneSuggestion || autoTuneError) && !autoTuneCollapsed && (
-              <div className="rounded-2xl border border-neutral-800 bg-neutral-800/40 p-5">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                      <path d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    <h4 className="text-sm font-semibold text-neutral-200">Auto-Tune 建议</h4>
-                    {autoTuneLoading && (
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500/20 border-t-blue-500" />
-                    )}
-                  </div>
-                  <button
-                    onClick={() => setAutoTuneCollapsed(true)}
-                    className="rounded-lg px-2 py-1 text-xs text-neutral-500 hover:text-neutral-300"
-                  >
-                    ✕ 关闭
-                  </button>
-                </div>
-
-                {autoTuneError && (
-                  <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-                    ⚠ {autoTuneError}
-                  </div>
-                )}
-
-                {autoTuneSuggestion && !autoTuneLoading && (
-                  <div className="space-y-4">
-                    {/* 墨迹热点区域 */}
-                    {autoTuneSuggestion.regions && autoTuneSuggestion.regions.length > 0 && (
-                      <div>
-                        <h5 className="mb-2 text-xs font-semibold text-neutral-300">
-                          墨迹热点区域（{autoTuneSuggestion.regions.length} 个）
-                        </h5>
-                        <div className="space-y-1.5">
-                          {autoTuneSuggestion.regions.slice(0, 3).map((r, i) => (
-                            <div key={i} className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-xs">
-                              <span className="text-neutral-500">#{i + 1}</span>
-                              <span className="flex-1 font-mono text-neutral-400">
-                                region=[{r.region.map((v) => v.toFixed(2)).join(', ')}]
-                              </span>
-                              <span className="text-neutral-500">
-                                score={r.score.toFixed(2)} · {r.blocks} blocks
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 密度带推荐 */}
-                    {autoTuneSuggestion.density_bands && autoTuneSuggestion.density_bands.length > 0 && (
-                      <div>
-                        <h5 className="mb-2 text-xs font-semibold text-neutral-300">
-                          密度带推荐（{autoTuneSuggestion.density_bands.length} 条）
-                        </h5>
-                        <div className="space-y-1.5">
-                          {autoTuneSuggestion.density_bands.map((b, i) => (
-                            <div key={i} className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2">
-                              <div className="mb-1 flex items-center justify-between text-xs">
-                                <span className="font-semibold text-neutral-300">{b.label}</span>
-                                <span className="font-mono text-neutral-500">
-                                  [{b.density_min.toFixed(4)}, {b.density_max.toFixed(4)}]
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 text-[11px] text-neutral-500">
-                                <span>覆盖率 {(b.coverage * 100).toFixed(1)}%</span>
-                                {b.region && (
-                                  <span className="font-mono">
-                                    region=[{b.region.map((v) => v.toFixed(2)).join(', ')}]
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 采纳按钮 */}
-                    <div className="flex items-center justify-end gap-3">
-                      <button
-                        onClick={() => void applyAutoTune()}
-                        disabled={applyingAutoTune}
-                        className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white shadow shadow-blue-500/40 transition-all hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {applyingAutoTune ? '采纳中…' : '✓ 采纳建议并写入 preset'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {autoTuneLoading && !autoTuneSuggestion && (
-                  <div className="py-6 text-center text-sm text-neutral-500">正在分析图片密度特征…</div>
-                )}
-              </div>
+              <AutoTuneCard
+                loading={autoTuneLoading}
+                suggestion={autoTuneSuggestion}
+                error={autoTuneError}
+                applying={applyingAutoTune}
+                onClose={() => setAutoTuneCollapsed(true)}
+                onApply={() => void applyAutoTune()}
+              />
             )}
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -936,6 +914,16 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* Stage 5.3 人审弹窗（有待审类目时显示） */}
+      {showFeedbackModal && pendingRequest && (
+        <CategoryFeedbackModal
+          request={pendingRequest}
+          submitting={submittingFeedback}
+          onClose={() => setShowFeedbackModal(false)}
+          onSubmit={submitCategoryFeedback}
+        />
+      )}
     </div>
   )
 }
