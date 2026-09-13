@@ -20,12 +20,14 @@ CREATE TABLE IF NOT EXISTS categories (
   confidence REAL DEFAULT 0.5 CHECK(confidence >= 0 AND confidence <= 1),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,                    -- Stage 5.3：人审软删除时间戳（NULL = 未删除）
   FOREIGN KEY(parent_id) REFERENCES categories(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_cat_parent ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_cat_confidence ON categories(confidence DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_path ON categories(path);
+CREATE INDEX IF NOT EXISTS idx_cat_deleted ON categories(deleted_at);
 
 -- ------------------------------------------------------------
 -- 表 2: 类目提示词（逐条 prompt 学权重）

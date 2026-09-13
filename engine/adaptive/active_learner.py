@@ -232,47 +232,164 @@ def apply_feedback_to_category(
         user_action: 用户操作（accept / rename / delete / merge）
         user_data: 操作附加数据
         db_path: 数据库路径
-    
+
     操作逻辑：
         - accept: 提升该类目的所有 prompt 权重 1.1×（贝叶斯正反馈）
-        - rename: 更新 categories.name_zh / name_en
-        - delete: 标记类目为已删除（soft delete，不真删）
-        - merge: 将该类目的 prompt 合并到目标类目
-    
-    ⚠️ TODO：当前仅实现 accept 逻辑（权重更新），rename/delete/merge 留待后续补充
+        - rename: 更新 categories.name_zh / name_en / name_template
+        - delete: 软删除（置 categories.deleted_at 时间戳），保留历史引用
+        - merge:  源类目 prompts 迁移到目标类目 + 软删源类目
+
+    Returns:
+        dict: 操作结果 {"ok": bool, "action": str, "detail": str}
     """
     import sqlite3
-    
+    from datetime import datetime, timezone
+
+    now = int(datetime.now(timezone.utc).timestamp())
     conn = sqlite3.connect(db_path)
+    result = {"ok": False, "action": user_action, "detail": ""}
+
+    def _fail(msg: str):
+        result["detail"] = msg
+        print(f"[ActiveLearner] {user_action}: {category_id} 失败 —— {msg}")
+        return result
+
+    def _category_exists(cur, cid: str):
+        row = cur.execute("SELECT id FROM categories WHERE id = ?", (cid,)).fetchone()
+        return row is not None
+
     try:
+        cur = conn.cursor()
+
         if user_action == "accept":
-            # 提升权重 1.1×（贝叶斯正反馈，与 Stage 3 learner 一致）
-            conn.execute(
+            cur.execute(
                 """
                 UPDATE category_prompts
                 SET weight = weight * 1.1, n_accept = n_accept + 1
                 WHERE category_id = ?
                 """,
-                (category_id,)
+                (category_id,),
             )
             conn.commit()
-            print(f"[ActiveLearner] accept: {category_id} 权重提升 1.1×")
-        
+            result["ok"] = True
+            result["detail"] = f"权重 ×1.1（影响 {cur.rowcount} 条 prompt）"
+            print(f"[ActiveLearner] accept: {category_id} {result['detail']}")
+
         elif user_action == "rename":
-            # TODO：更新 categories 表的 name_zh / name_en
-            print(f"[ActiveLearner] rename: {category_id} → {user_data} (TODO)")
-        
+            new_name = (user_data or {}).get("new_name") if user_data else None
+            if not new_name or not str(new_name).strip():
+                return _fail("缺少 new_name（user_data.new_name）")
+            new_name = str(new_name).strip()
+            new_name_en = (user_data or {}).get("new_name_en")
+
+            row = cur.execute(
+                "SELECT name_en, name_template FROM categories WHERE id = ?", (category_id,)
+            ).fetchone()
+            if not row:
+                return _fail(f"类目不存在：{category_id}")
+
+            old_en, old_template = row[0], row[1]
+            name_en = str(new_name_en).strip() if new_name_en else (old_en or "")
+
+            # 重建 name_template：保留原序号前缀（如 "NN_"），其余按 "{name_zh}_{name_en}"
+            prefix = ""
+            if old_template and "_" in old_template:
+                head = old_template.split("_")[0]
+                if head and len(head) <= 4 and head.isalnum():
+                    prefix = f"{head}_"
+            new_template = f"{prefix}{new_name}_{name_en}" if name_en else f"{prefix}{new_name}"
+
+            cur.execute(
+                """
+                UPDATE categories
+                SET name_zh = ?, name_en = ?, name_template = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_name, name_en or None, new_template, now, category_id),
+            )
+            conn.commit()
+            result["ok"] = True
+            result["detail"] = f"{old_template} → {new_template}"
+            print(f"[ActiveLearner] rename: {category_id} {result['detail']}")
+
         elif user_action == "delete":
-            # TODO：soft delete（添加 deleted_at 字段或标记 status="deleted"）
-            print(f"[ActiveLearner] delete: {category_id} (TODO)")
-        
+            if not _category_exists(cur, category_id):
+                return _fail(f"类目不存在：{category_id}")
+
+            # 软删除：置 deleted_at；查询层用 deleted_at IS NULL 过滤
+            cur.execute(
+                "UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, category_id),
+            )
+            conn.commit()
+            result["ok"] = True
+            result["detail"] = f"软删除（deleted_at={now}），保留 prompt 与历史引用"
+            print(f"[ActiveLearner] delete: {category_id} {result['detail']}")
+
         elif user_action == "merge":
-            # TODO：合并 prompt 到目标类目
-            target = user_data.get("target_category_id") if user_data else None
-            print(f"[ActiveLearner] merge: {category_id} → {target} (TODO)")
-        
+            target = (user_data or {}).get("target_category_id") if user_data else None
+            if not target or not str(target).strip():
+                return _fail("缺少 target_category_id（user_data.target_category_id）")
+            target = str(target).strip()
+
+            if target == category_id:
+                return _fail("目标类目不能与源类目相同")
+
+            if not _category_exists(cur, category_id):
+                return _fail(f"源类目不存在：{category_id}")
+            if not _category_exists(cur, target):
+                return _fail(f"目标类目不存在：{target}")
+
+            # 迁移 prompts：目标已有同名 prompt → 取权重较大者；否则改挂到目标
+            src_prompts = cur.execute(
+                """
+                SELECT id, prompt, weight FROM category_prompts
+                WHERE category_id = ?
+                """,
+                (category_id,),
+            ).fetchall()
+
+            migrated, merged, kept = 0, 0, 0
+            for pid, prompt, weight in src_prompts:
+                dup = cur.execute(
+                    "SELECT id, weight FROM category_prompts WHERE category_id = ? AND prompt = ?",
+                    (target, prompt),
+                ).fetchone()
+                if dup:
+                    # 同名 prompt：保留权重较大者，删除源行
+                    if (weight or 0) > (dup[1] or 0):
+                        cur.execute(
+                            "UPDATE category_prompts SET weight = ? WHERE id = ?",
+                            (weight, dup[0]),
+                        )
+                        merged += 1
+                    else:
+                        kept += 1
+                    cur.execute("DELETE FROM category_prompts WHERE id = ?", (pid,))
+                else:
+                    cur.execute(
+                        "UPDATE category_prompts SET category_id = ? WHERE id = ?",
+                        (target, pid),
+                    )
+                    migrated += 1
+
+            # 源类目软删除
+            cur.execute(
+                "UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                (now, now, category_id),
+            )
+            conn.commit()
+            result["ok"] = True
+            result["detail"] = (
+                f"→ {target}：迁移 {migrated} 条、权重合并 {merged} 条、"
+                f"目标已更优跳过 {kept} 条；源类目软删除"
+            )
+            print(f"[ActiveLearner] merge: {category_id} {result['detail']}")
+
         else:
-            print(f"[ActiveLearner] 未知操作：{user_action}")
-    
+            return _fail(f"未知操作：{user_action}")
+
+        return result
+
     finally:
         conn.close()

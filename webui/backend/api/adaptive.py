@@ -406,16 +406,27 @@ async def submit_category_feedback_endpoint(
                 detail=f"未找到反馈请求：{feedback_request_id}"
             )
         
-        # 2. 应用反馈到类目（更新权重或执行 rename/delete/merge）
-        apply_feedback_to_category(
+        # 2. 应用反馈到类目（accept 更新权重 / rename / delete / merge）
+        #    库路径支持环境变量覆盖（与 /adaptive/stats 一致，便于测试隔离）
+        db_path = os.getenv("ADAPTIVE_DB_PATH", str(DEFAULT_DB_PATH))
+        outcome = apply_feedback_to_category(
             category_id=category_id,
             user_action=user_action,
             user_data=user_data_dict,
+            db_path=db_path,
         )
-        
+
+        # 操作本身失败（如缺 user_data、目标类目不存在）→ 明确报 400
+        if not outcome.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"反馈操作失败：{outcome.get('detail', '未知原因')}",
+            )
+
         return {
             "status": "ok",
-            "message": f"反馈已应用：{user_action} on {category_id}"
+            "message": f"反馈已应用：{user_action} on {category_id}",
+            "detail": outcome.get("detail", ""),
         }
     
     except HTTPException:

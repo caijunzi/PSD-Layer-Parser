@@ -226,6 +226,7 @@ class DBManager:
         FROM categories c
         JOIN category_material_affinity a ON c.id = a.category_id
         WHERE a.material_family = ? AND a.affinity >= ?
+          AND c.deleted_at IS NULL
         ORDER BY a.affinity DESC, c.confidence DESC
         LIMIT ?
         """
