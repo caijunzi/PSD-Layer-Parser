@@ -1,11 +1,15 @@
 """Adaptive Semantics API - 自适应语义统计与配置端点
 
-提供自适应语义机制的当前状态、版本信息、类目统计等查询接口。
+提供自适应语义机制的当前状态、版本信息、类目统计等查询接口，
+以及 Stage 2 的图级 Auto-Tune 建议接口。
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from typing import Optional
 import os
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 router = APIRouter()
 
@@ -179,3 +183,55 @@ async def get_adaptive_categories(material_family: Optional[str] = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.post("/adaptive/suggest-auto-tune")
+async def suggest_auto_tune_endpoint(
+    file: UploadFile = File(...),
+    preset_id: Optional[str] = Form(None),
+):
+    """图级 Auto-Tune（Stage 2）：上传图片，返回 region + 密度带建议。
+
+    Args:
+        file: 上传的图像（multipart）
+        preset_id: 可选。preset 名称或 JSON 路径；提供则对 preset 中带 region
+                   的语义类逐类推荐密度带。
+
+    Returns:
+        {
+          "image_size": [w, h],
+          "global_percentiles": {"p50","p75","p90","p95"},
+          "regions": [{"region": [x0,y0,x1,y1], "score", "blocks"}, ...],
+          "density_bands": [{"label","region","density_min","density_max","coverage"}, ...],
+        }
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+
+    # Unicode 安全：bytes → imdecode（不落盘，避免中文路径问题）
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="无法解码图像（格式不支持或损坏）")
+
+    classes = None
+    if preset_id:
+        try:
+            from engine.schemas.presets import load_preset
+
+            preset = load_preset(preset_id)
+            classes = preset.get("ai_semantic_classes")
+        except Exception as e:
+            # preset 加载失败不致命：退化为通用九宫格建议
+            print(f"[suggest-auto-tune] preset 加载失败，退化为通用建议: {e}")
+
+    try:
+        from engine.adaptive.auto_tune import suggest_auto_tune
+
+        result = suggest_auto_tune(img, classes=classes)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Auto-Tune 失败: {str(e)}")
+
+    h, w = img.shape[:2]
+    result["image_size"] = [int(w), int(h)]
+    return result
