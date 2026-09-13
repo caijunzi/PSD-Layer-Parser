@@ -235,3 +235,83 @@ async def suggest_auto_tune_endpoint(
     h, w = img.shape[:2]
     result["image_size"] = [int(w), int(h)]
     return result
+
+
+@router.post("/adaptive/apply-auto-tune")
+async def apply_auto_tune_endpoint(
+    preset_id: str = Form(...),
+    suggestions: str = Form(...),
+):
+    """采纳 Auto-Tune 建议并写回 preset（Stage 2 闭环）。
+
+    Args:
+        preset_id: preset 名称或 JSON 路径
+        suggestions: JSON 字符串，格式 {"regions": [...], "density_bands": [...]}
+
+    Returns:
+        {"status": "ok", "preset_path": "..."}
+    """
+    from pathlib import Path
+    import json
+
+    # 解析建议 JSON
+    try:
+        sugg = json.loads(suggestions)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"suggestions JSON 格式错误: {e}")
+
+    if not isinstance(sugg, dict):
+        raise HTTPException(status_code=400, detail="suggestions 必须是对象")
+
+    regions = sugg.get("regions", [])
+    density_bands = sugg.get("density_bands", [])
+
+    # 加载 preset
+    try:
+        from engine.schemas.presets import load_preset
+        preset = load_preset(preset_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"preset 加载失败: {e}")
+
+    # 确定 preset 文件路径（load_preset 返回 dict，需反查路径）
+    preset_dir = Path(__file__).parent.parent.parent.parent / "presets"
+    preset_path = preset_dir / f"{preset_id}.json"
+    if not preset_path.exists():
+        # 尝试 preset_id 本身是相对/绝对路径
+        preset_path = Path(preset_id)
+        if not preset_path.exists():
+            raise HTTPException(status_code=404, detail=f"preset 文件不存在: {preset_id}")
+
+    # 合并建议到 preset（原地修改）
+    # regions: 写入顶层 "auto_tune_regions" 字段（新增，供未来消费）
+    # density_bands: 追加/更新 "density_band_classes"
+    if regions:
+        preset["auto_tune_regions"] = regions
+
+    if density_bands:
+        # 已有 density_band_classes 的合并策略：按 label 匹配更新，或追加
+        existing = {b.get("name"): b for b in preset.get("density_band_classes", [])}
+        for band in density_bands:
+            label = band.get("label")
+            if not label:
+                continue
+            # Auto-Tune 产出的 band 可能无 name，用 label 作 name
+            entry = {
+                "name": label,
+                "density_min": band.get("density_min"),
+                "density_max": band.get("density_max"),
+                "region": band.get("region"),
+                "note": f"Auto-Tune 推荐（coverage={band.get('coverage', 0):.2f}）",
+            }
+            # 过滤 None
+            entry = {k: v for k, v in entry.items() if v is not None}
+            existing[label] = entry
+        preset["density_band_classes"] = list(existing.values())
+
+    # 写回文件
+    try:
+        preset_path.write_text(json.dumps(preset, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"写入 preset 失败: {e}")
+
+    return {"status": "ok", "preset_path": str(preset_path)}
