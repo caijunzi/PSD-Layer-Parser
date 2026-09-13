@@ -315,3 +315,111 @@ async def apply_auto_tune_endpoint(
         raise HTTPException(status_code=500, detail=f"写入 preset 失败: {e}")
 
     return {"status": "ok", "preset_path": str(preset_path)}
+
+
+# ========== Stage 5.2：主动学习（人审反馈）端点 ==========
+
+
+@router.get("/adaptive/pending-feedbacks")
+async def get_pending_feedbacks_endpoint(limit: int = 10):
+    """获取待审类目列表（前端轮询调用，Stage 5.2）
+    
+    Args:
+        limit: 最多返回多少条（默认 10）
+    
+    Returns:
+        {
+            "pending_feedbacks": [
+                {
+                    "feedback_request_id": "fb_20260913_234500_abc123",
+                    "task_id": "task_20260913_120555_b2b831",
+                    "image_path": "/path/to/image.png",
+                    "uncertain_categories": [
+                        {"category_id": "water_ripples", "confidence": 0.62, "bbox": [...]}
+                    ],
+                    "created_at": 1789276800
+                },
+                ...
+            ]
+        }
+    """
+    try:
+        from engine.adaptive.active_learner import get_pending_feedbacks
+        
+        pending = get_pending_feedbacks(limit=limit)
+        return {"pending_feedbacks": pending}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"读取待审队列失败: {str(e)}")
+
+
+@router.post("/adaptive/categories/{category_id}/feedback")
+async def submit_category_feedback_endpoint(
+    category_id: str,
+    feedback_request_id: str = Form(...),
+    user_action: str = Form(...),  # accept / rename / delete / merge
+    user_data: Optional[str] = Form(None),  # JSON 字符串，如 {"new_name": "..."} 或 {"target_category_id": "..."}
+):
+    """提交类目人审反馈（Stage 5.2）
+    
+    Args:
+        category_id: 类目 ID
+        feedback_request_id: 反馈请求 ID（关联待审队列）
+        user_action: 用户操作（accept / rename / delete / merge）
+        user_data: 操作附加数据（JSON 字符串，可选）
+    
+    Returns:
+        {"status": "ok", "message": "反馈已应用"}
+    """
+    import json
+    from engine.adaptive.active_learner import (
+        mark_feedback_reviewed,
+        apply_feedback_to_category,
+    )
+    
+    # 解析 user_data（JSON 字符串 → dict）
+    user_data_dict = None
+    if user_data:
+        try:
+            user_data_dict = json.loads(user_data)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"user_data JSON 格式错误: {e}")
+    
+    # 验证 user_action
+    valid_actions = {"accept", "rename", "delete", "merge"}
+    if user_action not in valid_actions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的 user_action: {user_action}，必须是 {valid_actions}"
+        )
+    
+    try:
+        # 1. 标记反馈请求已审核
+        marked = mark_feedback_reviewed(
+            feedback_request_id=feedback_request_id,
+            user_action=user_action,
+            user_data=user_data_dict,
+        )
+        if not marked:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到反馈请求：{feedback_request_id}"
+            )
+        
+        # 2. 应用反馈到类目（更新权重或执行 rename/delete/merge）
+        apply_feedback_to_category(
+            category_id=category_id,
+            user_action=user_action,
+            user_data=user_data_dict,
+        )
+        
+        return {
+            "status": "ok",
+            "message": f"反馈已应用：{user_action} on {category_id}"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"应用反馈失败: {str(e)}")
+
