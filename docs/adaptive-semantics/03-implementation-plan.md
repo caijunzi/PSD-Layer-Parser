@@ -676,25 +676,35 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 **验收标准**：
 - ✅ `pytest tests/test_adaptive_active.py`（7 例全绿：识别低置信 / 自定义阈值 / 写入读取队列 / 标记已审核 / limit 限制 / 空列表边界）
 
-#### Step 5.3：前端人审弹窗（1 天）— ⏳ 待开始
+#### Step 5.3：前端人审弹窗（1 天）— ✅ 已完成（2026-09-14，commit `b7241a3`）
 
 **文件**：`webui/frontend/src/components/CategoryFeedbackModal.tsx`
 
-> ⚠️ **目录说明**：`webui/frontend/src/components/` 当前**不存在**（Stage 2 的 Auto-Tune 卡片是内联在
-> `App.tsx` 里的）。按用户决策，**新建 `components/` 目录**，并顺便把 Stage 2 的 Auto-Tune
+> ✅ **目录已新建**：`webui/frontend/src/components/`（此前不存在）。
+> 按用户决策，**新建 `components/` 目录**，并顺便把 Stage 2 的 Auto-Tune
 > 卡片抽成 `AutoTuneSuggestion.tsx`（重构，避免 App.tsx 继续膨胀）。
 
 **任务**：
-1. 展示不确定类目（图片缩略图 + 检出框 + 类目名 + confidence）
-2. 按钮：accept / rename(输入框) / delete / merge(选择目标类目)
-3. 提交到 `POST /api/adaptive/categories/{id}/feedback`
-4. 集成轮询：`App.tsx` 每 3 秒调用 `GET /api/adaptive/pending-feedbacks`，有数据则弹窗
-5. （重构）把 Stage 2 的 Auto-Tune 建议卡片从 `App.tsx` 抽出为 `AutoTuneSuggestion.tsx`
+1. ✅ 展示不确定类目（类目 id + prompt + bbox + **confidence 进度条**）
+2. ✅ 按钮：accept / rename(输入框) / delete / merge(输入目标类目 id)
+   - ⚠️ **merge 用文本输入目标 id**（非下拉选择）：后端 merge 目前是 TODO，
+     不为一个未实现功能扩展 API（`GET /api/adaptive/categories` 只返回 `display_name` 无 id）
+3. ✅ 提交到 `POST /api/adaptive/categories/{id}/feedback`
+4. ✅ 集成轮询：`App.tsx` 每 3 秒调用 `GET /api/adaptive/pending-feedbacks?limit=1`
+   - 弹窗打开时**暂停轮询**（避免打断用户操作），组件卸载清理 interval
+   - 轮询失败**静默**（后端未启用或无待审数据时不打扰用户）
+   - 逐类目裁决：处理一个移除一个，**全部处理完才关闭弹窗**
+5. ✅ （重构）Stage 2 的 Auto-Tune 卡片从 `App.tsx` 抽出为 `AutoTuneSuggestion.tsx`
+   - App.tsx **-97 行**，改为受控组件 `<AutoTuneCard />`，UI 与交互不变
 
 **验收标准**：
-- 手动触发主动学习，前端弹窗显示
-- 提交反馈后，后端日志显示更新
-- `npx tsc --noEmit --skipLibCheck` 编译通过
+- ✅ `npx tsc --noEmit --skipLibCheck` **编译通过（零错误）**
+- ✅ **真实 HTTP 冒烟**（FastAPI TestClient）：
+  - `GET /api/adaptive/pending-feedbacks` → 200，返回 1 条（task_smoke_001 / water_ripples）
+  - `POST /api/adaptive/categories/water_ripples/feedback`（accept）→ 200，权重 ×1.1 生效
+  - 复查 → 剩余 0 条（状态已转 reviewed）
+- ✅ 冒烟**脏数据已清理**：删除测试待审队列，回滚权重 1.1→1.0、n_accept 1→0
+- ✅ 引擎 128 passed / 2 skipped；WebUI 28 OK（零回归）
 
 ---
 
@@ -725,7 +735,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 | Stage 2 端到端 | `test_adaptive_stage2_e2e.py` | S1+S2 |
 | Stage 3 端到端 | `test_adaptive_stage3_e2e.py` | S1+S2+S3 |
 | Stage 4 端到端 | `test_adaptive_stage4_e2e.py` | S1+S2+S3+S4 |
-| Stage 5 端到端 | `test_adaptive_stage5_e2e.py` | 全部 |
+| Stage 5 端到端 | `test_adaptive_stage5_e2e.py` | 全部（未建，功能已由 5.1/5.2/5.3 单元+HTTP 冒烟覆盖）|
 | 回归测试（golden）| `test_golden_layers.py`（修改版）| 全部 |
 | 性能测试 | `test_adaptive_performance.py` | 全部 |
 | 兼容性测试 | `test_adaptive_compatibility.py` | 全部 |

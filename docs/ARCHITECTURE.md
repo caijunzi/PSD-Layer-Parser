@@ -206,7 +206,7 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 | 4 | CBR 案例推理库（指纹索引 + 余弦检索） | ✅ | `b9eb5b0` |
 | 5.1 | 类目树管理（3 层 + 无环检测） | ✅ | `b74ab10` |
 | 5.2 | 主动学习（不确定类目人审 + 轮询 API） | ✅ | `ae39733` |
-| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构 | ⏳ | — |
+| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构 | ✅ | `b7241a3` |
 
 ### 8.3 三条架构决策（与 ADR-013 等并列）
 
