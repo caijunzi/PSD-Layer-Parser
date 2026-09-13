@@ -2,7 +2,8 @@
 
 > **定位**：架构决策记录（ADR）、工程铁律、实测避坑数据的**唯一存放处**。
 > 顶层开发计划见 `UNIVERSAL_LAYER_ENGINE_DEVELOPMENT_PLAN.md`（SSOT），日常演化见 `DAILY_LOG.md`。
-> 最后更新：2026-09-10 · 对应计划版本 **v2.4**
+> 自适应语义匹配机制（Stage 1~5）详见 `docs/adaptive-semantics/` 三件套。
+> 最后更新：2026-09-14 · 对应计划版本 **v2.4**（自适应语义 Stage 1~5.2 已落地）
 
 ---
 
@@ -45,6 +46,11 @@
 | ADR-018 | 前端分层控制采用 manifest 契约（`layers.json` + `text_manifest.json`），结构参照 Stratum | 🟡 部分落地（2026-09-10：交付级 `DeliverableManifest` 随产物落盘并全量披露 TAC/生成占比/seed/ICC；前端未接） |
 | ADR-019 | **五维系统完整性与防欺骗代码审核体系**：环境真实探活、零硬编码静态扫描、物理交付物合规、防伪代码落地、真实基准量化，列入最高工程纪律 | ✅ 已落地（v2.4） |
 | ADR-020 | **局部 ROI 裁剪与多核并发超分**：非全画幅图层（印章、题跋、芦雁等）提取紧凑 BBox 并加安全 Padding 局部引导滤波，多核 `ThreadPoolExecutor(max_workers=6)` 并发 | ✅ 已落地（v2.4） |
+| ADR-021 | **自适应语义：episode 存储走文件系统 JSONL**，不建 `episodes` 数据库表。Stage 3/4 实际已用 JSONL 归档（`webui/data/adaptive_episodes.jsonl` / `episodes/*.episode.json`），回补表需双写且零收益 | ✅ 已定（2026-09-13，用户决策 A） |
+| ADR-022 | **自适应语义：人审通信用轮询**（前端 3 秒 `GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE。理由：后端 FastAPI 无 WS/SSE 基建；轮询零新依赖、延迟 ≤3s 非高频场景够用 | ✅ 已定（2026-09-13，用户决策 B） |
+| ADR-023 | **自适应语义：`inherit_priors()` 跳过实现，标 TODO**。`category_priors` 表为空（0 条），无可继承数据；手写 seed 先验是"拍脑袋"，等 Stage 3 反馈学习产生真实统计后再补 | ✅ 已定（2026-09-13，用户决策 C） |
+| ADR-024 | **自适应语义端点统一前缀 `/api/adaptive/`**，沿用既有 `webui/backend/api/adaptive.py`，**不新建** `adaptive_semantics.py`（Stage 1~4 端点均在此文件，保持一致） | ✅ 已定（2026-09-13） |
+| ADR-025 | **类目树迁移脚本用 `migration_003_build_tree.py`**。`002` 已被 preset 别名占用（`migration_002_apply.py` / `migration_002_preset_aliases.sql`），避免命名冲突 | ✅ 已定（2026-09-13） |
 
 > ### 2026-09-10 深夜增补（当日落地的新决策，状态以本段为准）
 >

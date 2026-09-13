@@ -5,6 +5,18 @@
 
 > ### ⚠️ 2026-09-10 晚 · 数值更正声明（保留历史条目原文，仅在此声明正确值）
 >
+> **➡️ 最新状态指针（2026-09-14 凌晨，自适应语义阶段）**：
+> 2026-09-13 ~ 09-14 完成**自适应语义匹配机制 Stage 1~5.2**（6 个提交），
+> 详见 `docs/adaptive-semantics/03-implementation-plan.md` 与 `ARCHITECTURE.md §8`：
+> - Stage 4 CBR 案例推理库（指纹索引 + 余弦检索 + 主流程集成）— commit `b9eb5b0`
+> - Stage 5.1 类目树管理（3 层树 + 无环检测 + 迁移 003）— commit `b74ab10`
+> - Stage 5.2 主动学习（不确定类目人审 + 轮询 API）— commit `ae39733`
+> - Stage 3 反馈闭环核心骨架 — commit `21e8f90`
+>
+> 引擎全量测试基线 **128 passed / 2 skipped**。本日志下方条目均为 2026-09-11 及之前的历史记录。
+>
+> ⚠️ **测试环境**：跑测试须用系统 Python 3.12.10（WorkBuddy managed 3.13.12 无 numpy）。
+>
 > **➡️ 最新状态指针（2026-09-11 凌晨）**：本日志之后当日又完成 31 个提交——
 > 掩模质量门、双产品线（PLATE 真 CMYK / DESIGN RGB）、ICC 分色 + TAC 合规、
 > 印前三算子、内核合流（写盘收敛 `core/psd_compiler`）、Preset SSOT、随机种子固定、

@@ -12,6 +12,7 @@
 | `docs/技术尽调与代码审查报告_20260910.md` | **第三方视角全量尽调：实测复核、完成度评估、P0/P1/P2 改进建议（§十二为内核合流后全量回归与状态对齐）** |
 | `docs/技术栈适配性专业评估与建议_20260910.md` | **硬件实效实测 / 技术栈匹配度评估 / 三条路线建议** |
 | `docs/文档对齐清单_20260910.md` | 文档对齐记录 |
+| `docs/adaptive-semantics/` | **自适应语义匹配机制**（Stage 1~5）：`01-architecture.md` / `02-data-schema.md` / `03-implementation-plan.md` |
 | `GEMINI.md` | AI 入口摘要与停止条件 |
 
 > **当前状态速览（2026-09-11 凌晨，内核合流后）**：双产品线均已端到端跑通——
@@ -52,6 +53,30 @@
 | 层几何 | 全画布 | 元素紧凑最小外接包围盒 (Non-zero BBox) |
 | 命名 | `03_Print_Antique_Gold_CMYK` | `06_Architecture_Pavilion` |
 | 状态 | 🔴 **未打通**：微孔/烫金/陷印/轮廓算子已实现，但**均未接入生产链路**，实测产物为 RGB | 🟡 能产出 16K PSB；元素掩模泄漏已修复，**待重跑产物复核** |
+
+---
+
+## 一之二、自适应语义匹配机制（Stage 1~5，2026-09-13 ~ 09-14 新增）
+
+让引擎「越用越准」的自进化层：换图免调参、冷启动复用历史、不确定类目请求人审。
+独立文档见 `docs/adaptive-semantics/`。
+
+| Stage | 内容 | 状态 |
+| :--- | :--- | :--- |
+| 1 | 通用词库 + 材质匹配 + 类目选择（SQLite `webui/data/adaptive_semantics.db`） | ✅ |
+| 2 | 图级 Auto-Tune（墨密度场 → region / 密度带建议 → 一键采纳写回 preset） | ✅ |
+| 3 | 反馈闭环 + 影子进化（归因 / 回归基线 / 学习器，核心骨架） | 🟡 |
+| 4 | CBR 案例推理库（PCA128 指纹余弦检索，复用相似历史图参数，冷启动加速） | ✅ |
+| 5.1 | 类目树（3 层：山水画 → 7 大类 → 20 类目，含无环检测） | ✅ |
+| 5.2 | 主动学习（识别 confidence<0.7 类目 → 人审 → 权重更新，轮询方案） | ✅ |
+| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构（新建 `components/`） | ⏳ 待做 |
+
+**三条关键架构决策**（ADR-021/022/023，详见 `docs/MEMORY.md`）：
+1. episode 存储走**文件系统 JSONL**，不建 `episodes` 数据库表
+2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
+3. `inherit_priors()` **跳过实现标 TODO**（`category_priors` 表为空，等真实统计）
+
+> ⚠️ 引擎全量测试基线 **128 passed / 2 skipped**。
 
 ---
 

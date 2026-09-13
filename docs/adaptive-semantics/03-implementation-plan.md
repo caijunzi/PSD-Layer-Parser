@@ -329,7 +329,15 @@ async def suggest_auto_tune(file: UploadFile, preset_id: str):
 
 ---
 
-## 四、Stage 3：反馈闭环 + 影子进化
+## 四、Stage 3：反馈闭环 + 影子进化 — 🟡 核心骨架完成（2026-09-13，commit `21e8f90`）
+
+> **完成状态（核心骨架）**：
+> - ✅ 归因标签（`attribution.py`）+ 回归基线（`regression_tester.py` + `extract_baseline.py` + `baseline_audit_8d.json`）
+> - ✅ 学习器核心（`learner.py`）+ 后台任务封装（`webui/backend/core/background_learner.py`）
+> - ✅ `grounded_sam_provider.py` 记录 `dino_detections` + 质量门/弥散门归因字段
+> - ⏸️ **未做**：真实 episode 数据驱动的学习（`episodes` 数据库表从未建立，实际走 JSONL 文件）；
+>   `test_golden_layers.py` 新增的 2 个用例暂 `skipTest`（待端到端就绪）
+> - ⚠️ **架构决策**：episode 存储**维持文件系统路线**（JSONL），不回补数据库表
 
 ### 4.1 目标
 
@@ -477,7 +485,10 @@ tests/test_golden_layers.py              # 改为"核心类目必出 + 审计不
 
 ---
 
-## 五、Stage 4：案例推理库（CBR）
+## 五、Stage 4：案例推理库（CBR）— ✅ 已完成（2026-09-13，commit `b9eb5b0`）
+
+> **完成状态**：Step 4.1 / 4.2 / 4.3（主流程集成）全部完成；端到端测试 7 例全绿。
+> 引擎全量回归 **121 passed / 2 skipped**（基线 114 + 新增 7，零回归）。
 
 ### 5.1 目标
 
@@ -592,64 +603,98 @@ engine/adaptive/
 ├── category_tree.py                     # 类目树管理（插入/查询祖先/DFS 无环检测）
 └── active_learner.py                    # 主动学习：不确定类目 → 请求人审
 
-webui/frontend/src/components/
-└── CategoryFeedbackModal.tsx            # 人审弹窗
+webui/frontend/src/components/          # ⚠️ 需新建（当前不存在）
+├── CategoryFeedbackModal.tsx           # 人审弹窗（Step 5.3，待做）
+└── AutoTuneSuggestion.tsx              # Stage 2 卡片重构抽出（待做）
 
 webui/backend/api/
-└── adaptive_semantics.py                # 新增 POST /api/categories/{id}/feedback
+└── adaptive.py                         # ⚠️ 修正：不新建 adaptive_semantics.py
+                                        #    沿用既有 adaptive.py（Stage 1~4 端点都在此）
+                                        #    新增 GET /api/adaptive/pending-feedbacks
+                                        #    新增 POST /api/adaptive/categories/{id}/feedback
 ```
 
 #### 修改文件（3 个）
 
 ```
-engine/adaptive/schema.sql               # categories.parent_id / path 已有，无需改
-run_universal_engine.py                  # 集成主动学习
-webui/frontend/src/App.tsx               # 集成人审弹窗
+engine/adaptive/schema.sql               # categories.parent_id / path 已有，无需改 ✅
+run_universal_engine.py                  # 集成主动学习（待做，Step 5.3 之后）
+webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做）
 ```
+
+> ⚠️ **路径修正说明**：原计划写 `POST /api/categories/{id}/feedback` 并新建
+> `api/adaptive_semantics.py`。实际 `adaptive.py` 的 router 已带 `/adaptive` 前缀，
+> 且 Stage 1~4 所有端点（`suggest-auto-tune` / `apply-auto-tune`）都在此文件，
+> 为保持一致性，端点统一为 `/api/adaptive/...`，不再新建文件。
 
 ### 6.3 实现步骤（3 天）
 
-#### Step 5.1：类目树管理（1 天）
+#### Step 5.1：类目树管理（1 天）— ✅ 已完成（2026-09-13，commit `b74ab10`）
 
 **文件**：`engine/adaptive/category_tree.py`
 
 **任务**：
-1. `CategoryTree.insert(category_id, parent_id)` + 无环检测
-2. `CategoryTree.get_ancestors(category_id) -> [parent_id, grandparent_id, ...]`
-3. `CategoryTree.inherit_priors(new_category_id, parent_id)`：从父类目继承 area_budget / shape_prior
-4. 迁移脚本：`migrations/migration_002_build_tree.py`（手动标注 20 类目挂到 3 层树）
+1. ✅ `CategoryTree.insert(category_id, parent_id)` + 无环检测（DFS 遍历后代）
+2. ✅ `CategoryTree.get_ancestors(category_id) -> [parent_id, grandparent_id, ...]`
+3. ⏸️ `CategoryTree.inherit_priors(new_category_id, parent_id)`：**已跳过实现，标记 TODO**
+   - 原因：`category_priors` 表当前为空（0 条），无可继承数据
+   - 决策：等 Stage 3 反馈学习填充 priors 后再补（手写 seed 数据是"拍脑袋"，不如真实统计）
+4. ✅ 迁移脚本：`migrations/migration_003_build_tree.py`
+   - ⚠️ **修正**：原计划写 `migration_002_build_tree.py`，但 `002` 已被 preset 别名占用
+     （`migration_002_apply.py` / `migration_002_preset_aliases.sql`），故改用 **003**
+   - 实际结构：根「山水画」→ 7 个二级类目（山/水/植被/建筑/天象与云雾/人物与动物/底板与边框）→ 20 个三级类目
 
 **验收标准**：
-- `pytest tests/test_adaptive_tree.py`（插入循环依赖 → 报错；继承先验 → 断言值相同）
-- 迁移后 `SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL` ≥10
+- ✅ `pytest tests/test_adaptive_tree.py`（7 例全绿：插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors NotImplementedError）
+- ✅ 迁移后 `SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL` = **13**（≥10 达标）
+  - 总数 27（原 20 + 新增 8：1 根 + 7 二级）
+  - path 正确计算，如 `/landscape_painting/distant_mountains/`
 
-#### Step 5.2：主动学习（1 天）
+#### Step 5.2：主动学习（1 天）— ✅ 已完成（2026-09-13，commit `ae39733`）
 
-**文件**：`engine/adaptive/active_learner.py`
+**文件**：`engine/adaptive/active_learner.py` + `webui/backend/api/adaptive.py`
 
 **任务**：
-1. `ActiveLearner.identify_uncertain_categories(result, confidence_threshold=0.7)`：
+1. ✅ `ActiveLearner.identify_uncertain_categories(result, confidence_threshold=0.7)`：
    - 从检出结果提取 confidence <0.7 的类目
-2. `request_human_feedback(uncertain_categories) -> list[{category_id, user_action}]`：
-   - 触发前端弹窗（WebSocket / SSE 推送）
-   - 用户选择：accept / rename / delete / merge
-3. 反馈写入 episode + 立即更新 `category_prompts` / `category_priors`
+2. ✅ `request_human_feedback(uncertain_categories) -> feedback_request_id`：
+   - ⚠️ **修正通信机制**：原计划"WebSocket / SSE 推送"，实际采用**轮询方案**
+   - 理由：后端是 FastAPI 无 WebSocket/SSE 基础设施；轮询零新依赖、够用（延迟 ≤3s）
+   - 实现：写入待审队列 JSONL → 前端 3 秒轮询 `GET /api/adaptive/pending-feedbacks`
+3. ✅ 反馈写入 + 立即更新 `category_prompts` 权重：
+   - ⚠️ **修正存储路线**：原计划写 `episodes` 数据库表，实际**维持文件系统路线**
+     （`episodes` 表从未建立，Stage 3/4 一直用 JSONL，故 Stage 5 沿用 JSONL 保持一致）
+   - 待审队列：`webui/data/pending_feedbacks.jsonl`
+   - `accept` 操作：贝叶斯权重提升 1.1×（与 Stage 3 learner 一致）
+   - `rename` / `delete` / `merge`：**标记 TODO**（待真实需求再补，仅打日志）
+
+**新增 API 端点**（`webui/backend/api/adaptive.py`，+104 行）：
+- `GET /api/adaptive/pending-feedbacks?limit=10` → 返回待审类目列表
+- `POST /api/adaptive/categories/{category_id}/feedback`
+  - Form 参数：`feedback_request_id` / `user_action`(accept|rename|delete|merge) / `user_data`(JSON 字符串)
 
 **验收标准**：
-- 单元测试：模拟不确定类目，断言触发人审请求
+- ✅ `pytest tests/test_adaptive_active.py`（7 例全绿：识别低置信 / 自定义阈值 / 写入读取队列 / 标记已审核 / limit 限制 / 空列表边界）
 
-#### Step 5.3：前端人审弹窗（1 天）
+#### Step 5.3：前端人审弹窗（1 天）— ⏳ 待开始
 
 **文件**：`webui/frontend/src/components/CategoryFeedbackModal.tsx`
+
+> ⚠️ **目录说明**：`webui/frontend/src/components/` 当前**不存在**（Stage 2 的 Auto-Tune 卡片是内联在
+> `App.tsx` 里的）。按用户决策，**新建 `components/` 目录**，并顺便把 Stage 2 的 Auto-Tune
+> 卡片抽成 `AutoTuneSuggestion.tsx`（重构，避免 App.tsx 继续膨胀）。
 
 **任务**：
 1. 展示不确定类目（图片缩略图 + 检出框 + 类目名 + confidence）
 2. 按钮：accept / rename(输入框) / delete / merge(选择目标类目)
-3. 提交到 `POST /api/categories/{id}/feedback`
+3. 提交到 `POST /api/adaptive/categories/{id}/feedback`
+4. 集成轮询：`App.tsx` 每 3 秒调用 `GET /api/adaptive/pending-feedbacks`，有数据则弹窗
+5. （重构）把 Stage 2 的 Auto-Tune 建议卡片从 `App.tsx` 抽出为 `AutoTuneSuggestion.tsx`
 
 **验收标准**：
 - 手动触发主动学习，前端弹窗显示
 - 提交反馈后，后端日志显示更新
+- `npx tsc --noEmit --skipLibCheck` 编译通过
 
 ---
 
@@ -664,9 +709,13 @@ webui/frontend/src/App.tsx               # 集成人审弹窗
 | 类目选择 | `test_adaptive_selector.py` | 4（3 mode / 核心类目必出）|
 | Auto-Tune | `test_adaptive_auto_tune.py` | 3（密度带 / region）|
 | 学习器 | `test_adaptive_learner.py` | 6（归因 / 权重更新 / 护栏 / 回归）|
-| CBR | `test_adaptive_cbr.py` | 3（冷启动 / 热启动 / 索引）|
-| 类目树 | `test_adaptive_tree.py` | 4（插入 / 无环 / 继承）|
-| 主动学习 | `test_adaptive_active.py` | 3（不确定类目识别 / 反馈）|
+| CBR | `test_adaptive_cbr.py` | **7**（冷启动×2 / 热启动×3 / 性能 / 持久化）|
+| 类目树 | `test_adaptive_tree.py` | **7**（插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors）|
+| 主动学习 | `test_adaptive_active.py` | **7**（识别低置信 / 无不确定 / 自定义阈值 / 写入读取队列 / 标记已审核 / limit / 空列表）|
+
+> ⚠️ **测试数修正**：计划原定 CBR 3 例、类目树 4 例、主动学习 3 例；
+> 实际实现更充分，分别为 **7 / 7 / 7** 例（多出性能、持久化、边界情况等用例）。
+> 引擎全量测试：基线 **128 passed / 2 skipped**（含 Stage 4 CBR 7 + Stage 5.1 树 7 + Stage 5.2 主动 7）。
 
 ### 7.2 集成测试（8 个）
 

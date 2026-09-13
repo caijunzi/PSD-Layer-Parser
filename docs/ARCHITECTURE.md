@@ -162,3 +162,65 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
   当前跑 CPU——升级后 Step1（现 ~62-124s）有望大幅下降（见尽调报告 §十）
 - `--scale` CLI 参数会被 preset 的 `super_res_scale` 覆盖（优先级待修）
 - 封闭 5 类中仅屏风完成端到端验证；新增品类只改 preset（G2）
+
+---
+
+## 8. 自适应语义匹配机制（Stage 1~5，2026-09-13 ~ 09-14 新增）
+
+> 独立文档体系见 `docs/adaptive-semantics/`（架构 / 数据 schema / 实现计划三件套）。
+> 本节为架构层索引，便于从 ARCHITECTURE 直通。
+
+### 8.1 分层位置
+
+```
+                        自适应语义匹配机制（新增层）
+                                  │
+    交互层（WebUI / CLI）          │
+        │                          │
+        ├── ► 图级自适应层（每次运行现算，不入库）
+        │      指纹 PCA128 → 材质判别 → CBR 检索（Stage 4）
+        │      → Auto-Tune（Stage 2）→ 类目选择（Stage 1）
+        │
+        ├── ► 品类模板层（preset，低频进化）
+        │      preset.mode = locked/hybrid/auto
+        │
+        ├── ► 通用语义词库（SQLite，持续进化）
+        │      webui/data/adaptive_semantics.db
+        │      类目树（Stage 5.1，3 层）+ prompts 权重
+        │
+        └── ► 异步学习流程（Stage 3 / 5.2）
+               episode 归档（JSONL）→ 归因 → 护栏 → 影子模式
+               → 人审反馈（轮询）→ 权重更新
+                                  │
+                                  ▼
+                    机制内核（DINO/SAM/超分/补全/审计，不可变）
+```
+
+### 8.2 Stage 完成矩阵
+
+| Stage | 内容 | 状态 | Commit |
+| :--- | :--- | :--- | :--- |
+| 1 | 通用词库 + 材质匹配 + 类目选择 | ✅ | `0b321f6` |
+| 2 | 图级 Auto-Tune（引擎 + API + 前端卡片） | ✅ | `909057a` / `e890dbd` |
+| 3 | 反馈闭环 + 影子进化（核心骨架） | 🟡 | `21e8f90` |
+| 4 | CBR 案例推理库（指纹索引 + 余弦检索） | ✅ | `b9eb5b0` |
+| 5.1 | 类目树管理（3 层 + 无环检测） | ✅ | `b74ab10` |
+| 5.2 | 主动学习（不确定类目人审 + 轮询 API） | ✅ | `ae39733` |
+| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构 | ⏳ | — |
+
+### 8.3 三条架构决策（与 ADR-013 等并列）
+
+| 决策 | 选择 | 理由 |
+| :--- | :--- | :--- |
+| **episode 存储** | 文件系统 JSONL（`webui/data/*.jsonl`），**不建 `episodes` 表** | Stage 3/4 实际已用 JSONL，回补表需双写且零收益 |
+| **人审通信** | 轮询 `GET /api/adaptive/pending-feedbacks`（前端 3s） | FastAPI 无 WS/SSE 基建；轮询零新依赖、延迟 ≤3s 够用 |
+| **`inherit_priors()`** | 跳过实现，标 TODO | `category_priors` 表为空（0 条），手写 seed 是"拍脑袋" |
+
+> ⚠️ **注意**：`01-architecture.md` 中描述的 `episodes` 数据库表与 WebSocket/SSE 推送
+> **均未落地**，实际以本节与 `03-implementation-plan.md` 的修正注记为准。
+
+### 8.4 测试环境（重要）
+
+跑本项目测试**必须用系统 Python 3.12.10**
+（`C:\Users\CK\AppData\Local\Programs\Python\Python312\python.exe`，含 numpy 2.4.6 / sklearn 1.9.1 /
+cv2 5.0.0 / psd_tools 1.19.0）。WorkBuddy managed Python 3.13.12 **无 numpy**。

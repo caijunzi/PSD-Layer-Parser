@@ -53,3 +53,41 @@ profile primary_device=GPU.1 且 shield=GPU.0(Arc) 时**优先 Arc**；首个编
   - 引擎：`py -m pytest tests/ -q`（基线 114 passed / 2 skipped）
   - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`（**不可加 -t**，否则 base 模块 import 失败；28 OK）
 - Git Bash 缺 tail/head（已知），勿用管道过滤
+
+## 自适应语义匹配机制（Stage 1~5）长期事实（2026-09-14 定稿）
+
+### 阶段状态
+| Stage | 内容 | 状态 | Commit |
+|---|---|---|---|
+| 1 | 通用词库+材质匹配+类目选择 | ✅ | 0b321f6 |
+| 2 | 图级 Auto-Tune | ✅ | 909057a / e890dbd |
+| 3 | 反馈闭环+影子进化 | 🟡 核心骨架 | 21e8f90 |
+| 4 | CBR 案例推理库 | ✅ | b9eb5b0 |
+| 5.1 | 类目树管理 | ✅ | b74ab10 |
+| 5.2 | 主动学习 | ✅ | ae39733 |
+| 5.3 | 前端人审弹窗 | ⏳ 待做 | — |
+
+### 五条架构决策（ADR-021~025，勿回退）
+1. **episode 存储 = 文件系统 JSONL**，不建 `episodes` 数据库表
+   （Stage 3/4 实际已用 JSONL；回补表需双写且零收益）
+2. **人审通信 = 轮询** `GET /api/adaptive/pending-feedbacks`（前端 3s）
+   （FastAPI 无 WS/SSE 基建；不引入 WebSocket/SSE）
+3. **`inherit_priors()` 跳过实现标 TODO**（`category_priors` 表为空 0 条）
+4. **端点统一前缀 `/api/adaptive/`**，沿用 `adaptive.py`，不新建 `adaptive_semantics.py`
+5. **类目树迁移 = `migration_003_build_tree.py`**（002 已被 preset 别名占用）
+
+### 关键数据结构事实（易踩坑）
+- **数据库** `webui/data/adaptive_semantics.db` 实际表况：
+  - `categories`：27 条（原 20 + 新增 8：1 根"山水画" + 7 二级），13 条有 parent_id
+  - `category_prompts`：47 条，weight/n_accept/n_reject 全 0（从未被学习更新）
+  - `category_priors`：**空表 0 条** → 故 inherit_priors 不可用
+  - **`episodes` 表不存在**（规划文档写了但实际从未建立，走 JSONL）
+- **类目树结构**：根 `landscape_painting`(山水画) → 7 二级(山/水/植被/建筑/天象与云雾/人物与动物/底板与边框) → 20 三级
+- **CBR 索引**：`webui/data/episode_index.pkl`（pickle，PCA128 指纹 + audit_passed）
+- **待审队列**：`webui/data/pending_feedbacks.jsonl`
+- **CBR 相似度阈值 0.7**；**人审不确定阈值 0.7**；**accept 权重 ×1.1**
+
+### 文档体系
+- 独立三件套：`docs/adaptive-semantics/01-architecture.md`(架构) / `02-data-schema.md`(数据) / `03-implementation-plan.md`(实现计划，含偏差修正注记)
+- 顶层索引：`ARCHITECTURE.md §8` / `README.md §一之二` / `MEMORY.md ADR-021~025`
+- ⚠️ `01-architecture.md` 里写的 episodes 表与 WebSocket/SSE **均未落地**，以 03 的修正注记为准

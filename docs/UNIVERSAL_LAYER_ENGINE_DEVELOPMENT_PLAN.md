@@ -3,7 +3,28 @@
 > **文档性质**：本项目唯一顶层开发计划（Single Source of Truth）。架构细节见 `ARCHITECTURE.md`，决策与避坑见 `MEMORY.md`，演化记录见 `DAILY_LOG.md`，实测基准见 `BENCHMARK_REPORT.md`。
 > **文档版本**：v2.4（v1.0 存档于 `docs/archive/UNIVERSAL_LAYER_ENGINE_DEVELOPMENT_PLAN_v1_20260909.md`）
 > **代码基线**：2026-09-10 工作区状态（`outputs/Rosetsu_Master_16k.psb` 实测 1.847 GB，元素掩模缺陷见 `docs/技术尽调与代码审查报告_20260910.md`）
-> **最后更新**：2026-09-10
+> **最后更新**：2026-09-14（自适应语义匹配机制 Stage 1~5.2 落地同步）
+>
+> ⚠️ **状态注记（2026-09-14 凌晨，自适应语义阶段）**：2026-09-13 ~ 09-14 新增
+> **自适应语义匹配机制**（Stage 1~5，独立文档体系 `docs/adaptive-semantics/`）：
+> - **Stage 1**（通用词库 + 材质匹配）✅ — SQLite 词库 `webui/data/adaptive_semantics.db`、
+>   PCA128 指纹、材质判别、类目选择（commit `0b321f6`）
+> - **Stage 2**（图级 Auto-Tune）✅ — 密度场分析 + `suggest` / `apply` 端点 + 前端建议卡片
+>   （commit `909057a` / `e890dbd`）
+> - **Stage 3**（反馈闭环 + 影子进化）🟡 核心骨架 — 归因/回归基线/学习器（commit `21e8f90`）
+> - **Stage 4**（CBR 案例推理库）✅ — 指纹索引 + 余弦检索 + 主流程集成（commit `b9eb5b0`）
+> - **Stage 5.1**（类目树）✅ — 3 层树 + 无环检测（commit `b74ab10`）
+> - **Stage 5.2**（主动学习）✅ — 不确定类目人审 + 轮询 API（commit `ae39733`）
+> - **Stage 5.3**（前端人审弹窗）⏳ 待做
+>
+> **关键架构决策（与本文档 §2 ADR 并列，详见 `docs/adaptive-semantics/`）**：
+> 1. **episode 存储走文件系统 JSONL**，不建 `episodes` 数据库表（与 Stage 3/4 实际实现一致，零迁移）
+> 2. **人审通信用轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
+> 3. **`inherit_priors()` 跳过实现**（`category_priors` 表为空，标记 TODO）
+> 4. 端点统一前缀 `/api/adaptive/`，不新建 `adaptive_semantics.py`
+>
+> 引擎全量测试基线：**128 passed / 2 skipped**（2026-09-14）。
+> 测试须用系统 Python 3.12.10（WorkBuddy managed 3.13.12 无 numpy），详见 `.workbuddy/memory/MEMORY.md`。
 >
 > ⚠️ **状态注记（2026-09-11 凌晨，重大改动后）**：本文 §1.3 的目标进度与 §7 的性能预算
 > 已被当晚的 31 个提交大幅推进——G1（内核合流：写盘唯一入口 `core/psd_compiler`）、

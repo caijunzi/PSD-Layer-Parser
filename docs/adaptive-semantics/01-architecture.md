@@ -6,6 +6,19 @@
 - **状态**: 架构定稿，待评审
 - **依赖决策**: 基于 20 个澄清问题的 ✅ 推荐方案
 
+> ### ⚠️ 2026-09-14 同步注记（实现偏差，以本注记与 `03-implementation-plan.md` 为准）
+>
+> 本文为**架构定稿草案**，Stage 1~5 落地后有三处与实现不一致：
+>
+> | 本文描述 | 实际情况 | 依据 |
+> |---|---|---|
+> | 表 4 `category_priors`（形状/面积先验，防假阳性） | 表结构**已建但为空表（0 条）**，故 `inherit_priors()` **跳过实现、标 TODO** | ADR-023 |
+> | 人审反馈（§交互层"人审反馈按钮"） | 通信用**轮询** `GET /api/adaptive/pending-feedbacks`，**非** WebSocket/SSE | ADR-022 |
+> | — | episode 存储确为文件 `webui/data/episodes/YYYY-MM/*.json`，**未建数据库表**（与本文 §表 3 一致 ✅） | ADR-021 |
+>
+> **当前进度**：Stage 1/2/4/5.1/5.2 ✅ 已完成；Stage 3 🟡 核心骨架；Stage 5.3 ⏳ 待做。
+> 完整状态矩阵与 commit 见 `ARCHITECTURE.md §8.2` 与 `03-implementation-plan.md`。
+
 ---
 
 ## 一、总体架构
