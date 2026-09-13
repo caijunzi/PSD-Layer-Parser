@@ -666,7 +666,18 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
      （`episodes` 表从未建立，Stage 3/4 一直用 JSONL，故 Stage 5 沿用 JSONL 保持一致）
    - 待审队列：`webui/data/pending_feedbacks.jsonl`
    - `accept` 操作：贝叶斯权重提升 1.1×（与 Stage 3 learner 一致）
-   - `rename` / `delete` / `merge`：**标记 TODO**（待真实需求再补，仅打日志）
+   - `rename` / `delete` / `merge`：**已真实实现**（2026-09-14 补完，见下「补完注记」）
+
+> **✅ 2026-09-14 补完注记（commit `906256b`）**：rename / delete / merge 已从 TODO 转为真实实现。
+> - `rename`：更新 `categories.name_zh / name_en / name_template`（template 保留 `NN_` 序号前缀）
+> - `delete`：**软删除**（置 `deleted_at`），非硬删 —— categories 被 prompts/affinity/priors
+>   外键 CASCADE 引用，硬删会清空学到的权重且不可恢复；历史 episode JSONL 也引用 category_id。
+>   软删后由 `db_manager` 主查询 `deleted_at IS NULL` 过滤，等价于不可见。
+> - `merge`：源类目 prompts 迁移到目标（同名 prompt 取权重较大者，绕 UNIQUE 约束）
+>   + 源类目软删；拒绝「缺目标 / 目标不存在 / 目标==源」
+> - 依赖迁移：`migrations/migration_004_feedback_ops.py`（categories 加 `deleted_at`，幂等）
+> - 统一返回 `{ok, action, detail}`；失败明确报 400，不再静默
+> - e2e：`tests/test_adaptive_stage5_e2e.py`（14 例全绿）
 
 **新增 API 端点**（`webui/backend/api/adaptive.py`，+104 行）：
 - `GET /api/adaptive/pending-feedbacks?limit=10` → 返回待审类目列表
@@ -735,7 +746,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 | Stage 2 端到端 | `test_adaptive_stage2_e2e.py` | S1+S2 |
 | Stage 3 端到端 | `test_adaptive_stage3_e2e.py` | S1+S2+S3 |
 | Stage 4 端到端 | `test_adaptive_stage4_e2e.py` | S1+S2+S3+S4 |
-| Stage 5 端到端 | `test_adaptive_stage5_e2e.py` | 全部（未建，功能已由 5.1/5.2/5.3 单元+HTTP 冒烟覆盖）|
+| Stage 5 端到端 | `test_adaptive_stage5_e2e.py` | 全部（✅ 已建，14 例全绿）|
 | 回归测试（golden）| `test_golden_layers.py`（修改版）| 全部 |
 | 性能测试 | `test_adaptive_performance.py` | 全部 |
 | 兼容性测试 | `test_adaptive_compatibility.py` | 全部 |

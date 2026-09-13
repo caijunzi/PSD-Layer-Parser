@@ -91,3 +91,16 @@ profile primary_device=GPU.1 且 shield=GPU.0(Arc) 时**优先 Arc**；首个编
 - 独立三件套：`docs/adaptive-semantics/01-architecture.md`(架构) / `02-data-schema.md`(数据) / `03-implementation-plan.md`(实现计划，含偏差修正注记)
 - 顶层索引：`ARCHITECTURE.md §8` / `README.md §一之二` / `MEMORY.md ADR-021~025`
 - ⚠️ `01-architecture.md` 里写的 episodes 表与 WebSocket/SSE **均未落地**，以 03 的修正注记为准
+
+### 人审操作实现（2026-09-14 补完，勿回退）
+- **delete = 软删除**（`categories.deleted_at`），**不硬删**：prompts/affinity/priors 外键 CASCADE，
+  硬删会清空权重且不可恢复；历史 episode JSONL 引用 category_id 也会悬空
+- 软删后由 `db_manager` 类目主查询 `c.deleted_at IS NULL` 过滤（**新增过滤点，勿删**）
+- **merge** 需处理 `UNIQUE(category_id, prompt)`：目标已有同名 prompt 取权重较大者
+- 迁移：`migration_004_feedback_ops.py`（categories.deleted_at，幂等）；schema.sql 已同步
+- 三个操作统一返回 `{ok, action, detail}`；API 在 ok=False 时明确 400
+
+### 测试隔离范本（踩过坑，务必遵守）
+涉及真实库的测试：① 复制 DB 到临时副本 + `ADAPTIVE_DB_PATH` 指向副本；
+② 待审队列等 JSONL 先备份、tearDown 还原；③ 跑完核对真实库零污染。
+反例：Stage 5.3 冒烟直打真实库 → water_ripples 权重被 ×1.1，事后才回滚。
