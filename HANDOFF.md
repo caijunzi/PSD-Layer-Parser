@@ -2,7 +2,7 @@
 
 > 换账号/换机器时的**唯一入口文档**。新会话第一句：先读 `HANDOFF.md`。
 > 深度细节在 `docs/`；项目日志在 `.workbuddy/memory/`。
-> 最后更新：2026-09-12 04:00 by WorkBuddy AI
+> 最后更新：2026-09-13 18:30 by WorkBuddy AI
 
 ---
 
@@ -44,7 +44,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 | agent-browser 调用必须文件重定向 | subprocess 管道 + daemon 继承句柄 = EOF 死锁 |
 | 金地参考取**全局 p88 分位数** | 局部平场会把大面积浓墨区内部"漂白"成 D≈0 |
 | `imagecodecs` 必须装 | SIMD RLE 加速；缺失回退纯 Python packbits（3MB/s vs 356MB/s，差 120×） |
-| 分割默认 CPU、DINO 固定 CPU | GPU 分割无净收益且破坏 RK-16 复现；DINO 的 `_C` 扩展在 GPU 上 NameError |
+| 分割（DINO+SAM2）固定 CPU | 2026-09-13 实测：SAM2 单 `predict` GPU 反慢 6.88×、`set_image` 仅 1.30×，DINO（14 prompt）GPU 仅 1.18×，且破坏 RK-16 逐像素复现 → 维持 CPU。DINO 缺 `_C` 已加守卫（ms_deform_attn.py，CUDA 走纯 torch 回退，不再 NameError） |
 | ICC 用 `profiles/CoatedFOGRA39.icc` | 系统库无 Fogra39L；**禁止 FOGRA27 冒名 39L**（README 明令勿混用），生产需换官方 ISOcoated_v2_300_eci |
 
 ## 4. 分层能力现状（核心指标）
@@ -77,9 +77,16 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 
 1. **05A 寒林**：Frangi 骨架流（规则引擎有组件）产线状层，或 WebUI 半自动笔刷
 2. **04D 远山**：需更高对比度扫描件或人工定位；本图不可自动
-3. **跨图配置**：region 框仍是构图先验 → 已提供 `tools/calibrate_density_bands.py`
+3. **04B 平渚**：DINO 未命中（滩涂无边界）→ 可试密度带通道
+4. **跨图配置**：region 框仍是构图先验 → 已提供 `tools/calibrate_density_bands.py`
    （直方图推荐参数），配金标准回归防漂移
-4. 前端 vite/后端 8099 为手动启停（用户会自行 kill，勿自动重启）
+5. 前端 vite/后端 8099 为手动启停（用户会自行 kill，勿自动重启）
+6. **自适应语义机制**（`docs/adaptive-semantics/`）：Stage 1（DB/指纹/材质判别/类目选择/episode 归档）
+   + 命名空间桥接（DB 类目 → preset 别名）**已完成**；计划中 **Stage 2（图级 Auto-Tune：region/密度带
+   建议 + 前端采纳卡片）/ Stage 3（反馈闭环+影子进化）/ Stage 4（CBR）/ Stage 5（类目树+主动学习）未做**。
+7. **品类扩展**：封闭 5 类仅 1 类（金地屏风）端到端验证；壁布/烫印/水墨/油画 4 类改 preset 即可接入但**未验证**。
+8. **未提交改动**：Stage 2 命名空间桥接（category_selector / migration_002 / seed_data_002 / tests / run_universal_engine）。
+9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
 ## 7. 常用命令
 

@@ -178,8 +178,9 @@ class GroundedSAMProvider:
 
             print("[GroundedSAMProvider] Loading Grounding DINO Swin-T model...")
             # DINO 固定 CPU：其 deform-attn 的 CUDA 分支依赖未编译的 `_C` 扩展
-            # （third_party 的 ms_deform_attn.py:330），GPU 上会 NameError；
-            # 且 DINO 输入仅 800px，CPU 开销可接受。SAM2（大图 encoder，最重）走 GPU。
+            # （third_party 的 ms_deform_attn.py:330）；实测 GPU（纯 torch 回退）仅
+            # 1.18×（14 prompt 63.1s→53.4s）且占 1.8GB 显存、放弃 RK-16 逐像素复现，
+            # 收益不足故维持 CPU。SAM2（大图 encoder，最重）走 self.torch_device。
             self.dino_device = "cpu"
             self.sam_device = self.torch_device
             self.dino_model = load_dino(self.dino_cfg, self.dino_ckpt, device=self.dino_device)
