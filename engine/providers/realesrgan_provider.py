@@ -115,69 +115,72 @@ class RealESRGANProvider:
 
         core = ov.Core()
         available = core.available_devices
-        target_hw = self.preferred_device.upper()
-        if target_hw == "GPU.1":
-            # NVIDIA RTX 5070 Laptop (Blackwell sm_120) stalls in NVIDIA OpenCL compiler on SPIR-V deep nets.
-            # Intel Arc 140T (GPU.0) has 16GB unified RAM and native OpenVINO Level Zero compiler (6s compile, 1.2s/tile).
-            if "GPU.0" in available:
-                print(f"[RealESRGANProvider] 硬件调度优化: NVIDIA 5070 (GPU.1, Blackwell sm_120) OpenCL 驱动编译深度图会挂起，自动切换至原生 Intel Arc 140T 16GB (GPU.0) 进行硬件加速")
-                target_hw = "GPU.0"
-            elif "CPU" in available:
-                target_hw = "CPU"
-        elif target_hw not in available:
-            target_hw = "GPU.0" if "GPU.0" in available else "CPU"
+        # RealESRGAN 为显存/带宽密集型（大图 4x 输出），实测 Intel Arc(GPU.0, 原生 Level Zero)
+        # 显著快于 RTX 5070(GPU.1, OpenVINO 通用后端)：Arc ~1.2s/片 vs 5070 ~17s/首片
+        # （见 scratch/bench_esrgan_gpu.py 实测）。故 robust_performance（护盾=Arc）下优先护盾设备；
+        # 若用户显式选 5070 直通(shield=CPU)，则尊重首选 5070，不强制改道。
+        pref = self.preferred_device.upper()
+        shield = self.profile.shield_device.upper()
+        order = ([shield, pref, "CPU"] if (pref == "GPU.1" and shield == "GPU.0")
+                 else [pref, shield, "CPU"])
+        candidates = []
+        for d in order:
+            if d in available and d not in candidates:
+                candidates.append(d)
+        if not candidates:
+            candidates = ["CPU"]
 
-        # 1. 优先尝试已缓存的 OpenVINO IR 模型（毫秒级极速载入）
-        if os.path.isfile(self.xml_path):
-            try:
-                model = core.read_model(self.xml_path)
-                model.reshape([1, 3, self.tile_size, self.tile_size])
-                self.compiled_model = core.compile_model(model, target_hw)
-                self.backend = f"openvino_{target_hw}_cached_ir"
-                print(f"[RealESRGANProvider] Loaded cached OpenVINO IR on {target_hw} (Static {self.tile_size}x{self.tile_size})")
-                return
-            except Exception as e:
-                print(f"[RealESRGANProvider] Cached IR load error: {e}")
-
-        # 2. 次优尝试官方 PyTorch 权重转换并编译
-        if os.path.isfile(self.pth_path):
-            try:
-                print(f"[RealESRGANProvider] Converting PyTorch weights to OpenVINO IR on {target_hw}...")
-                pt_model = RRDBNet()
-                state_dict = torch.load(self.pth_path, map_location="cpu", weights_only=True)
-                if "params_ema" in state_dict:
-                    state_dict = state_dict["params_ema"]
-                elif "params" in state_dict:
-                    state_dict = state_dict["params"]
-                pt_model.load_state_dict(state_dict, strict=True)
-                pt_model.eval()
-
-                ov_model = ov.convert_model(pt_model, example_input=torch.zeros(1, 3, 128, 128))
-                ov_model.reshape([1, 3, -1, -1])
+        for dev in candidates:
+            print(f"[RealESRGANProvider] Trying device [{dev}] (preferred={pref}, shield={shield})...")
+            # 1. 已缓存 OpenVINO IR（毫秒级）
+            if os.path.isfile(self.xml_path):
                 try:
-                    ov.save_model(ov_model, self.xml_path)
-                except Exception:
-                    pass
-
-                self.compiled_model = core.compile_model(ov_model, target_hw)
-                self.backend = f"openvino_{target_hw}_pytorch_native"
-                print(f"[RealESRGANProvider] Real-ESRGAN compiled and ready on {target_hw}")
-                return
-            except Exception as e:
-                print(f"[RealESRGANProvider] PyTorch model conversion error: {e}")
-
-        # 3. 再次尝试历史 ONNX 模型
-        if os.path.isfile(self.onnx_path):
-            try:
-                model = core.read_model(self.onnx_path)
-                self.compiled_model = core.compile_model(model, target_hw)
-                self.backend = f"openvino_{target_hw}_onnx"
-                return
-            except Exception as e:
-                print(f"[RealESRGANProvider] ONNX load note: {e}")
+                    model = core.read_model(self.xml_path)
+                    model.reshape([1, 3, self.tile_size, self.tile_size])
+                    self.compiled_model = core.compile_model(model, dev)
+                    self.backend = f"openvino_{dev}_cached_ir"
+                    print(f"[RealESRGANProvider] Active device: [{dev}] (cached IR, {self.tile_size}x{self.tile_size})")
+                    return
+                except Exception as e:
+                    print(f"[RealESRGANProvider] [{dev}] cached IR error: {e}")
+            # 2. PyTorch 权重转换编译
+            if os.path.isfile(self.pth_path):
+                try:
+                    print(f"[RealESRGANProvider] Converting PyTorch weights to OpenVINO IR on [{dev}]...")
+                    pt_model = RRDBNet()
+                    state_dict = torch.load(self.pth_path, map_location="cpu", weights_only=True)
+                    if "params_ema" in state_dict:
+                        state_dict = state_dict["params_ema"]
+                    elif "params" in state_dict:
+                        state_dict = state_dict["params"]
+                    pt_model.load_state_dict(state_dict, strict=True)
+                    pt_model.eval()
+                    ov_model = ov.convert_model(pt_model, example_input=torch.zeros(1, 3, 128, 128))
+                    ov_model.reshape([1, 3, -1, -1])
+                    try:
+                        ov.save_model(ov_model, self.xml_path)
+                    except Exception:
+                        pass
+                    self.compiled_model = core.compile_model(ov_model, dev)
+                    self.backend = f"openvino_{dev}_pytorch_native"
+                    print(f"[RealESRGANProvider] Active device: [{dev}] (pytorch native)")
+                    return
+                except Exception as e:
+                    print(f"[RealESRGANProvider] [{dev}] pytorch conversion error: {e}")
+            # 3. 历史 ONNX
+            if os.path.isfile(self.onnx_path):
+                try:
+                    model = core.read_model(self.onnx_path)
+                    self.compiled_model = core.compile_model(model, dev)
+                    self.backend = f"openvino_{dev}_onnx"
+                    print(f"[RealESRGANProvider] Active device: [{dev}] (onnx)")
+                    return
+                except Exception as e:
+                    print(f"[RealESRGANProvider] [{dev}] onnx error: {e}")
 
         # 兜底降级
         self.backend = "fallback_guided_filter"
+        print("[RealESRGANProvider] All devices failed; using CPU guided-filter fallback")
 
     def upscale(
         self,

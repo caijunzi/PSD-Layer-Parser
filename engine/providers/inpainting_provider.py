@@ -69,10 +69,16 @@ class LaMaInpaintingProvider(BaseInpaintingProvider):
                 available = core.available_devices
                 
                 # Determine ordered candidate list
+                # LaMa 实测 Intel Arc(GPU.0) 比 RTX 5070(GPU.1) 快 ~25x（OpenVINO 通用后端
+                # 对 NVIDIA 无原生 EP；Arc 有原生 Level Zero）：GPU.0 0.225s/片 vs GPU.1 5.76s/片。
+                # 故护盾为 Arc 时优先护盾设备；否则尊重首选。见 scratch/bench_lama_gpu.py。
+                pref = (self.preferred_device or self.profile.primary_device).upper()
+                shield = self.profile.shield_device.upper()
+                order = ([shield, pref] if (pref == "GPU.1" and shield == "GPU.0")
+                         else [pref, shield])
+                order += ["GPU.1", "GPU.0", "CPU"]
                 candidates = []
-                if self.preferred_device and self.preferred_device in available:
-                    candidates.append(self.preferred_device)
-                for cand in ["GPU.1", "GPU.0", "CPU"]:
+                for cand in order:
                     if cand in available and cand not in candidates:
                         candidates.append(cand)
 
