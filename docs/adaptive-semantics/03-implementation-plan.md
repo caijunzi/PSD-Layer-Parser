@@ -747,6 +747,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 | Stage 3 端到端 | `test_adaptive_stage3_e2e.py` | S1+S2+S3 |
 | Stage 4 端到端 | `test_adaptive_stage4_e2e.py` | S1+S2+S3+S4 |
 | Stage 5 端到端 | `test_adaptive_stage5_e2e.py` | 全部（✅ 已建，14 例全绿）|
+| 接线守卫 | `test_adaptive_wiring.py` | 10（防「已实现但无生产调用」的链路断裂）|
 | 回归测试（golden）| `test_golden_layers.py`（修改版）| 全部 |
 | 性能测试 | `test_adaptive_performance.py` | 全部 |
 | 兼容性测试 | `test_adaptive_compatibility.py` | 全部 |

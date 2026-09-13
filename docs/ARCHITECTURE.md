@@ -208,6 +208,7 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 | 5.2 | 主动学习（不确定类目人审 + 轮询 API） | ✅ | `ae39733` |
 | 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构 | ✅ | `b7241a3` |
 | 补完 | rename/delete/merge 真实实现 + e2e 测试 | ✅ | `906256b` |
+| 修复 | 主动学习 / Stage 3 学习闭环**生产接线**（链路断裂）+ 接线守卫 | ✅ | `5dd1556` |
 
 ### 8.3 三条架构决策（与 ADR-013 等并列）
 
@@ -222,8 +223,8 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 
 ### 8.4 测试基线（2026-09-14）
 
-引擎全量：**142 passed / 2 skipped**（含 Stage 4 CBR 7 + Stage 5.1 树 7 + Stage 5.2 主动 7 +
-Stage 5 e2e 14）；WebUI：**28 OK**。
+引擎全量：**152 passed / 2 skipped**（含 Stage 4 CBR 7 + Stage 5.1 树 7 + Stage 5.2 主动 7 +
+Stage 5 e2e 14 + 接线守卫 10）；WebUI：**28 OK**。
 
 ### 8.5 测试环境（重要）
 

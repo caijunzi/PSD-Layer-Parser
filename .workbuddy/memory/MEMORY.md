@@ -104,3 +104,16 @@ profile primary_device=GPU.1 且 shield=GPU.0(Arc) 时**优先 Arc**；首个编
 涉及真实库的测试：① 复制 DB 到临时副本 + `ADAPTIVE_DB_PATH` 指向副本；
 ② 待审队列等 JSONL 先备份、tearDown 还原；③ 跑完核对真实库零污染。
 反例：Stage 5.3 冒烟直打真实库 → water_ripples 权重被 ×1.1，事后才回滚。
+
+### 接线（wiring）审计教训（2026-09-14，重要）
+**「单元测试全绿」≠「功能可用」**：测试直接调函数会绕过接线，
+导致「模块实现了但没人调用」的假完成。本次发现 2 处（Stage 5.2 主动学习、Stage 3 学习闭环）。
+
+防回退手段：`tests/test_adaptive_wiring.py` —— 静态断言生产源码含关键调用点。
+新增自适应模块后，务必：① 接生产调用点；② 在 wiring 测试加断言。
+
+### dino_detections 字段契约（勿改）
+provider 写入：`layer_name` / `prompt` / `boxes` / `logits` / `num_boxes` /
+`instance_split` + 门阶段补 `quality_gate_passed` / `quality_gate_reason` /
+`diffuse_gate_passed` / `diffuse_gate_reason`。
+attribution.py 按 **`layer_name`**（不是 category_id）取类目 —— 用错字段会静默 0 归因。
