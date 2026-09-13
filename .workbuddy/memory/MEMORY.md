@@ -45,3 +45,11 @@ profile primary_device=GPU.1 且 shield=GPU.0(Arc) 时**优先 Arc**；首个编
 - DML 因 LaMa 的 FFC 算子不支持而不可用。
 - torch 2.7.1+cu128 的 arch_list **原生含 sm_120**（Blackwell 可用）；ORT 是 onnxruntime-directml 1.24.4。
 - 本机 nvcc **不存在**（无任何 CUDA Toolkit）；MSVC 存在（VS2022 BuildTools cl.exe 14.44）。
+## 测试环境（重要，避免重复踩坑）
+**跑项目测试必须用系统 Python 3.12.10**：`C://Users//CK//AppData//Local//Programs//Python//Python312//python.exe`
+- 已装齐：numpy 2.4.6 / sklearn 1.9.1 / cv2 5.0.0 / PIL 12.2.0 / psd_tools 1.19.0 / pytoshop 1.2.1 / skimage 0.26.0
+- **WorkBuddy managed Python 3.13.12 无 numpy**，用它跑 pytest 会 ModuleNotFoundError
+- 全量测试命令（均用该解释器）：
+  - 引擎：`py -m pytest tests/ -q`（基线 114 passed / 2 skipped）
+  - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`（**不可加 -t**，否则 base 模块 import 失败；28 OK）
+- Git Bash 缺 tail/head（已知），勿用管道过滤
