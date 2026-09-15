@@ -11,6 +11,7 @@
 5. 反馈写回 episode + 更新 category_prompts 权重
 """
 import json
+import os
 import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -19,7 +20,13 @@ from datetime import datetime, timezone
 # 线程安全写
 _lock = threading.Lock()
 
+# 待审队列默认路径（保留常量供外部引用）
 DEFAULT_PENDING_PATH = "webui/data/pending_feedbacks.jsonl"
+
+
+def default_pending_path() -> str:
+    """解析待审队列路径（**调用时**读环境变量，便于测试隔离）。"""
+    return os.environ.get("ADAPTIVE_PENDING_PATH", DEFAULT_PENDING_PATH)
 
 
 def identify_uncertain_categories(
@@ -108,7 +115,7 @@ def request_human_feedback(
     uncertain_categories: List[Dict[str, Any]],
     task_id: str,
     image_path: Optional[str] = None,
-    pending_path: str = DEFAULT_PENDING_PATH
+    pending_path: Optional[str] = None
 ) -> str:
     """触发人审请求：写入待审队列（JSONL）
     
@@ -155,7 +162,7 @@ def request_human_feedback(
     }
     
     # 追加写入 JSONL（线程安全）
-    pending_file = Path(pending_path)
+    pending_file = Path(pending_path or default_pending_path())
     pending_file.parent.mkdir(parents=True, exist_ok=True)
     
     with _lock:
@@ -166,7 +173,7 @@ def request_human_feedback(
 
 
 def get_pending_feedbacks(
-    pending_path: str = DEFAULT_PENDING_PATH,
+    pending_path: Optional[str] = None,
     limit: int = 10
 ) -> List[Dict[str, Any]]:
     """读取待审队列（前端轮询调用）
@@ -178,7 +185,7 @@ def get_pending_feedbacks(
     Returns:
         待审请求列表（status="pending" 的前 N 条）
     """
-    pending_file = Path(pending_path)
+    pending_file = Path(pending_path or default_pending_path())
     if not pending_file.exists():
         return []
     
@@ -204,7 +211,7 @@ def mark_feedback_reviewed(
     feedback_request_id: str,
     user_action: str,
     user_data: Optional[Dict[str, Any]] = None,
-    pending_path: str = DEFAULT_PENDING_PATH
+    pending_path: Optional[str] = None
 ) -> bool:
     """标记反馈请求已审核（用户提交反馈后调用）
     
@@ -219,7 +226,7 @@ def mark_feedback_reviewed(
     
     实现：读取 JSONL → 找到对应请求 → 更新 status="reviewed" + reviewed_at + user_action → 写回
     """
-    pending_file = Path(pending_path)
+    pending_file = Path(pending_path or default_pending_path())
     if not pending_file.exists():
         return False
     
@@ -427,6 +434,41 @@ def apply_feedback_to_category(
 
         else:
             return _fail(f"未知操作：{user_action}")
+
+        # ---- 版本链登记（B4 接线，2026-09-15）----
+        # 人审改动落一个版本节点（Git 式链），便于回溯与回滚。
+        # 登记失败**不影响**反馈本身（词库已 commit），仅回传 version_note。
+        try:
+            from .db_manager import DBManager
+
+            mgr = DBManager(db_path)
+            vid = "v" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            ev = ""
+            if user_data:
+                ev = json.dumps(
+                    {k: user_data[k] for k in ("feedback_request_id",) if k in user_data},
+                    ensure_ascii=False,
+                )
+            ok_ver = mgr.create_version(
+                version_id=vid,
+                changeset=f"human_feedback:{user_action}:{category_id} | {result['detail']}",
+                evidence=ev,
+                snapshot={
+                    "action": user_action,
+                    "category_id": category_id,
+                    "detail": result["detail"],
+                    "user_data": user_data or {},
+                },
+                regression_status="passed",
+                activate=True,
+            )
+            mgr.close()
+            if ok_ver:
+                result["version_id"] = vid
+            else:
+                result["version_note"] = "版本登记失败（反馈已生效）"
+        except Exception as _ve:
+            result["version_note"] = f"版本登记异常（反馈已生效）: {_ve}"
 
         return result
 

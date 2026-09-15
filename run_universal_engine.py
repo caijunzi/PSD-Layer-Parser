@@ -34,6 +34,9 @@ from engine.tiled_super_res import UniversalTiledSuperRes
 from engine.psb_builder import UniversalPSBBuilder
 from concurrent.futures import ThreadPoolExecutor
 
+# 本次运行归档的 episode id（B5：供 --mode 循环后做审计回填 + CBR 索引重建）
+LAST_EPISODE_ID: Any = None
+
 def _build_operator_ctx(src_lr, preset=None):
     """构造算子用 ProcessingContext，落实铁律 R2（检测/输出双分支）。
 
@@ -200,6 +203,46 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     return summary, extra_layers
 
 
+def _post_run_audit_and_sync(output_path: str, source_path: str) -> None:
+    """出图后自动跑 8 维审计 + 回填 episode + 重建 CBR 索引（B5：CLI 冷启动闭环）。
+
+    由环境变量 `ULS_AUDIT_AFTER_RUN=1` 触发。此前只有 WebUI 任务流会审计并回填，
+    CLI 直跑时 episode 的 audit_passed 恒为 False → CBR 永远检索不中。
+    全程 try 包裹：审计/回填属旁路能力，失败不得影响产物。
+    """
+    stem, _ = os.path.splitext(output_path)
+    manifest = f"{stem}.manifest.json"
+    audit_json = f"{stem}.audit.json"
+    try:
+        import subprocess
+        import sys as _sys
+
+        cmd = [
+            _sys.executable, os.path.join("tools", "audit_psb.py"), output_path,
+            "--manifest", manifest, "--source", source_path, "--json", audit_json,
+        ]
+        r = subprocess.run(cmd, cwd=os.path.dirname(os.path.abspath(__file__)),
+                           capture_output=True, text=True, encoding="utf-8")
+        print(f"[PostRun] 8 维审计门 exit={r.returncode}（0=全过 / 2=有不通过维度）")
+
+        if not os.path.isfile(audit_json):
+            print("[PostRun] 未生成 audit.json，跳过 CBR 回填")
+            return
+        if not LAST_EPISODE_ID:
+            print("[PostRun] 本次无 episode（自适应未启用），跳过 CBR 回填")
+            return
+
+        from engine.adaptive.episode_archiver import update_episode_audit, sync_index_from_log
+        from engine.adaptive.regression_tester import extract_audit_8d
+
+        audit_8d = extract_audit_8d(audit_json)
+        if update_episode_audit(LAST_EPISODE_ID, audit_8d):
+            n = sync_index_from_log()
+            print(f"[PostRun] CBR 索引已按真实审计重建：{n} 条（episode={LAST_EPISODE_ID}）")
+    except Exception as e:  # 旁路失败静默
+        print(f"[PostRun] 审计/回填失败（不影响产物）: {e}")
+
+
 def _seed_everything(seed: int) -> None:
     """固定随机源（RK-16：产物可复现是 PLATE 线「可复算」验收的前提）。
 
@@ -236,6 +279,7 @@ def resolve_output_size(w_lr: int, h_lr: int, target_scale, target_w, target_h, 
 
 
 def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=None, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42):
+    global LAST_EPISODE_ID
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
     from engine.schemas.manifest import (
@@ -435,6 +479,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                         notes=f"mode={adaptive_mode}; n_selected={len(_cat_ids)}",
                     )
                     print(f"[Adaptive] episode 已归档: {epid}")
+                    LAST_EPISODE_ID = epid
                 except Exception as ae:
                     print(f"[Adaptive] episode 归档失败（不影响主流程）: {ae}")
         except Exception as e:
@@ -1063,3 +1108,6 @@ if __name__ == "__main__":
             icc_override=args.icc,
             seed=args.seed,
         )
+        # B5：出图后自动审计 + 回填 episode + 重建 CBR 索引（CLI 冷启动闭环）
+        if str(os.environ.get("ULS_AUDIT_AFTER_RUN", "")).lower() in ("1", "true", "yes"):
+            _post_run_audit_and_sync(job_out, args.input)

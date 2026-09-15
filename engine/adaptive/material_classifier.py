@@ -29,12 +29,8 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
     texture_feats = fingerprint["texture_features"]
     structure_feats = fingerprint["structure_features"]
 
-    # 关键修复（2026-09-15）：金地 / 宣纸水墨 / 绢本工笔 三族改用**中心主体区**统计。
-    # 扫描件外框常是博物馆灰底/桌面（实测 source_4000.jpg 外框 L37/b0，
-    # 而画心金地 L80/b38），用外框当"背景"会系统性误判。
-    # 油画布仍保留原外框口径（本次未标定，避免回归）。
-    bg_L, bg_a, bg_b = global_feats["bg_median_LAB"]
-    saturation = global_feats["saturation"]
+    # 2026-09-15：四族**全部**改用中心主体区统计（此前用外框，扫描件外框多为灰底）。
+    # 旧指纹无 center_* 键时回退到 bg 口径（向后兼容）。
     cL, ca, cb = global_feats.get("center_median_LAB", global_feats["bg_median_LAB"])
     csat = global_feats.get("center_saturation", global_feats["saturation"])
     edge_density = structure_feats["edge_density"]
@@ -45,7 +41,7 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
         "金地屏风": _score_gold_screen(cL, ca, cb, csat, edge_density),
         "宣纸水墨": _score_ink_paper(cL, cb, csat, edge_density, glcm_energy),
         "绢本工笔": _score_silk_painting(cL, cb, csat, edge_density, glcm_energy),
-        "油画布": _score_oil_canvas(bg_L, saturation, edge_density),
+        "油画布": _score_oil_canvas(cL, csat, edge_density),
         "其他": 0.3,  # 兜底分数
     }
     
@@ -172,28 +168,31 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
     return score
 
 
-def _score_oil_canvas(bg_L: float, saturation: float, edge_density: float) -> float:
+def _score_oil_canvas(cL: float, saturation: float, edge_density: float) -> float:
     """
-    油画布：多样亮度 + 高饱和（> 25）+ 高边缘密度（厚重笔触）
+    油画布：多样亮度 + 高饱和（> 25）+ 高边缘密度（厚重笔触）。
+
+    C3（2026-09-15）：统一到**中心区**口径（与其余三族一致）。
+    ⚠️ 无油画布真值样本，阈值为保守沿用（未重标定）；待补样本后再校。
     """
     score = 0.0
-    
+
     # 高饱和度（油画色彩浓郁）
     if saturation > 30:
         score += 0.4
     elif saturation > 20:
         score += 0.2
-    
+
     # 高边缘密度（笔触厚重）
     if edge_density > 0.08:
         score += 0.3
     elif edge_density > 0.05:
         score += 0.15
-    
+
     # 亮度多样（西式光影）
-    if 30 < bg_L < 80:
+    if 30 < cL < 80:
         score += 0.2
-    
+
     return score
 
 

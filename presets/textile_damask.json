@@ -12,6 +12,17 @@
     "background_mode": "fabric_substrate",
     "plate_inpaint_method": "telea_ns",
 
+    "seam_harmonization": {
+        "enabled": true,
+        "params": {
+            "mode": "cyclic_vertical",
+            "warp_band_px": 32,
+            "max_shift_px": 16,
+            "blend_method": "cosine_hann"
+        },
+        "comment": "大马士革为循环纹样：拼接前做接缝流场对齐（铁律 R3，禁止裸 vstack/hstack 硬拼）"
+    },
+
     "print_condition": "iso_uncoated",
 
     "ai_semantic_classes": [
@@ -52,6 +63,13 @@
             "layer_name": "11_烫金陷印_Foil_Trap_Spot",
             "params": { "trap_mm": 0.2, "trap_type": "spread" },
             "comment": "工程验证用团花层充作专色；生产时 spot 应指向烫金版图层"
+        },
+        "metallic_foil": {
+            "enabled": true,
+            "valid_mask_layer": "03_金箔卷草纹样_Gold_Filigree_Motif",
+            "copper_layer_name": "13A_玫瑰铜箔专色_Foil_Copper",
+            "gold_layer_name": "13B_复古金专色_Foil_Gold",
+            "comment": "本 preset 含金箔卷草纹样 → 铜/金箔分色成独立专色层（原仅有算子、零调用）"
         }
     }
 }

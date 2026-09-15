@@ -75,9 +75,10 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 
 ## 6. 未决风险 / 下一步
 
-1. **05A 寒林**：Frangi 骨架流（规则引擎有组件）产线状层，或 WebUI 半自动笔刷
-2. **04D 远山**：需更高对比度扫描件或人工定位；本图不可自动
-3. **04B 平渚**：DINO 未命中（滩涂无边界）→ 可试密度带通道
+1. **05A 寒林**：✅ **已解决**——`区域先验 SAM` 通道直接出 2 层（无需 Frangi）
+2. **04D 远山**：❌ **确认不可自动**（源图对比度不足，弥散门正确拒绝，外接框覆盖 74.5%）；维持"人工/换源"
+3. **04B 平渚**：✅ **已解决**——`区域先验 SAM` 通道出层
+   详见 `docs/未决提取难题结论_20260915.md`
 4. **跨图配置**：region 框仍是构图先验 → 已提供 `tools/calibrate_density_bands.py`
    （直方图推荐参数），配金标准回归防漂移
 5. 前端 vite/后端 8099 为手动启停（用户会自行 kill，勿自动重启）
@@ -87,7 +88,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    （护栏：affinity≥0.6 且 ≤10 条），须重跑金标准与 RK-16 复核。
 7. **品类扩展**：封闭 5 类仅 1 类（金地屏风）端到端验证；壁布/烫印/水墨/油画 4 类改 preset 即可接入但**未验证**。
 8. **提交状态**：2026-09-15 批次改动见 §9；提交前必跑两组全量测试
-   （当前 159 passed / 2 skipped + WebUI 28 OK）。`webui/data/adaptive_semantics.db.bak-20260915`
+   （当前 169 passed / 2 skipped + WebUI 33 OK）。`webui/data/adaptive_semantics.db.bak-20260915`
    为迁移修复前备份，确认无误后可删。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
@@ -141,7 +142,23 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 - 实测：写意水墨山水 → **宣纸水墨 0.65**（原误判绢本 0.70）；织物 → 绢本工笔 1.00；金地图仍 1.00。
 - 油画布仍保留原外框口径（未标定）。⚠️ 无绢本真值样本，绢本阈值属保守估计。
 
-**测试**：引擎 166 passed / 2 skipped；WebUI 28 OK；迁移 003 在真实库执行成功（残留自环 0）。
+**测试**：引擎 169 passed / 2 skipped；WebUI 33 OK；迁移 003 在真实库执行成功（残留自环 0）。
+
+### 9.2 B/C 组收尾（2026-09-15 下午）
+
+| 项 | 内容 | 验证 |
+|---|---|---|
+| **B1** | `textile_damask` 启用 **R3 接缝对齐**（`seam_harmonization`）+ **金属分色**（`plate_operators.metallic_foil`） | 实跑 damask：`[R3] pre_rmse=21.461 → post_rmse=15.588`（↓27%）；`metallic_foil: ok` |
+| **B2** | `background_learner` 守护线程消费队列 + 注册 `POST /adaptive/trigger-learning`、`GET /adaptive/learning-status` | 新测试 `webui/backend/tests/test_adaptive_learning_endpoints.py`（3 例，真机 TestClient） |
+| **B3** | 审计回填链路单测隔离 | 新测试 `webui/backend/tests/test_audit_backfill.py`（2 例；日志实证"索引重建 1 条"） |
+| **B4** | `create_version` **接线到人审反馈**（每次改动落版本节点并激活） | 新测试 `tests/test_feedback_version.py`（3 例） |
+| **B5** | 引擎新增 `ULS_AUDIT_AFTER_RUN=1`：出图后自动审计 → 回填 episode → 重建 CBR 索引；路径支持 `ADAPTIVE_EPISODE_PATH`/`ADAPTIVE_PENDING_PATH`/`ADAPTIVE_INDEX_PATH` 覆写 | 实跑 japanese：`[PostRun] 8 维审计门 exit=0` + `CBR 索引已按真实审计重建：9 条` |
+| **C1** | 05A/04B/04A/03 均由既有通道解决；仅 04D 确认不可自动（无新算法） | `docs/未决提取难题结论_20260915.md` |
+| **C2** | 品类端到端：金地 ✅（多次）、**壁布 ✅**（damask exit=0）、**水墨 ✅**（ink 172.8s/9 层） | 烫金=金地 preset 变体（已覆盖）；**油画缺样本**（待补图） |
+| **C3** | 油画布族统一到**中心区**口径（阈值保守沿用，标注"未标定"） | 四族口径一致；4 张实测图判定无回归 |
+| **C4** | 文档—代码矛盾勘误（M1–M19），**不改历史文档**、以追加新文档形式 | `docs/文档与代码对齐勘误_20260915.md` |
+
+**已知未决**：油画（无样本）、绢本（无真值样本，阈值保守）、04D（数据条件）。
 
 ## 7. 常用命令
 
@@ -150,8 +167,8 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试
-python -m unittest discover -s tests -p 'test_*.py'          # 引擎 159 passed / 2 skipped（py -m pytest tests/ -q 亦可）
-python -m unittest discover -s webui/backend/tests -p 'test_*.py'  # WebUI 28 OK
+python -m unittest discover -s tests -p 'test_*.py'          # 引擎 169 passed / 2 skipped（py -m pytest tests/ -q 亦可）
+python -m unittest discover -s webui/backend/tests -p 'test_*.py'  # WebUI 33 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg

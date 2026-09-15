@@ -151,9 +151,15 @@ def get_default_indexer() -> EpisodeIndexer:
     
     Returns:
         EpisodeIndexer 实例，索引文件位于 webui/data/episode_index.pkl
+        （可用环境变量 ADAPTIVE_INDEX_PATH 覆盖，便于测试隔离/多实例部署）
     """
+    import os
     from pathlib import Path
-    
+
+    override = os.environ.get("ADAPTIVE_INDEX_PATH")
+    if override:
+        return EpisodeIndexer.load_or_create(Path(override))
+
     # 推断项目根目录（engine/adaptive/ 往上两级）
     engine_root = Path(__file__).resolve().parent.parent.parent
     index_path = engine_root / "webui" / "data" / "episode_index.pkl"

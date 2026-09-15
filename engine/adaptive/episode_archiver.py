@@ -11,6 +11,7 @@ Stage 1 仅做「归档」：以 JSONL 追加写（带锁），不改动 SQLite 
 这样无需迁移 schema，且天然可追加、可回放。
 """
 import json
+import os
 import threading
 import hashlib
 from datetime import datetime, timezone
@@ -20,7 +21,13 @@ from typing import Dict, List, Optional, Any
 # 线程安全写（主流程与 Web 可能并发归档）
 _lock = threading.Lock()
 
+# episode 日志默认路径（保留常量供外部引用）
 DEFAULT_EPISODE_PATH = "webui/data/adaptive_episodes.jsonl"
+
+
+def default_episode_path() -> str:
+    """解析 episode 日志路径（**调用时**读环境变量，便于测试隔离/多实例部署）。"""
+    return os.environ.get("ADAPTIVE_EPISODE_PATH", DEFAULT_EPISODE_PATH)
 
 
 def _episode_id(material_family: str, image_path: Optional[str], ts: str) -> str:
@@ -38,7 +45,7 @@ def archive_episode(
     outcome: str = "selected",
     confidence: float = 0.0,
     notes: str = "",
-    episode_path: str = DEFAULT_EPISODE_PATH,
+    episode_path: Optional[str] = None,
     update_index: bool = True,
     audit_8d: Optional[Dict[str, Any]] = None,
     auto_tune: Optional[Dict[str, Any]] = None,
@@ -102,7 +109,7 @@ def archive_episode(
         "notes": notes,
     }
 
-    path = Path(episode_path)
+    path = Path(episode_path or default_episode_path())
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with _lock:
@@ -140,7 +147,7 @@ def archive_episode(
 
 
 def load_episodes(
-    episode_path: str = DEFAULT_EPISODE_PATH,
+    episode_path: Optional[str] = None,
     limit: int = 1000,
     material_family: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -155,7 +162,7 @@ def load_episodes(
     Returns:
         episode 记录列表（按时间倒序）
     """
-    path = Path(episode_path)
+    path = Path(episode_path or default_episode_path())
     if not path.exists():
         return []
 
@@ -179,7 +186,7 @@ def load_episodes(
 
 def load_episode_by_id(
     episode_id: str,
-    episode_path: str = DEFAULT_EPISODE_PATH,
+    episode_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """按 episode_id 从 JSONL 日志中读取单条记录（供 CBR 检索复用参数）。
 
@@ -193,7 +200,7 @@ def load_episode_by_id(
     Returns:
         episode 记录字典，未找到返回 None
     """
-    path = Path(episode_path)
+    path = Path(episode_path or default_episode_path())
     if not path.exists():
         return None
 
@@ -214,7 +221,7 @@ def load_episode_by_id(
 def update_episode_audit(
     episode_id: str,
     audit_8d: Dict[str, Any],
-    episode_path: str = DEFAULT_EPISODE_PATH,
+    episode_path: Optional[str] = None,
 ) -> bool:
     """回填某 episode 的审计 8 维结果（审计在出图之后才产生，故需事后回填）。
 
@@ -230,7 +237,7 @@ def update_episode_audit(
     Returns:
         是否找到并更新
     """
-    path = Path(episode_path)
+    path = Path(episode_path or default_episode_path())
     if not path.exists():
         return False
 
@@ -264,7 +271,7 @@ def update_episode_audit(
 
 
 def sync_index_from_log(
-    episode_path: str = DEFAULT_EPISODE_PATH,
+    episode_path: Optional[str] = None,
 ) -> int:
     """从 JSONL 日志重建 CBR 指纹索引（用记录中的 embedding + audit_8d 判定 audit_passed）。
 
@@ -277,7 +284,7 @@ def sync_index_from_log(
     import numpy as np
     from .episode_indexer import get_default_indexer
 
-    path = Path(episode_path)
+    path = Path(episode_path or default_episode_path())
     if not path.exists():
         return 0
 
