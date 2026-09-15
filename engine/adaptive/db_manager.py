@@ -8,6 +8,7 @@
 """
 import sqlite3
 import threading
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
@@ -332,17 +333,53 @@ class DBManager:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    def get_prompt_weight(
+        self,
+        category_id: str,
+        prompt: str,
+        exclude_shadow: bool = True
+    ) -> Optional[float]:
+        """
+        读取某 (category_id, prompt) 的真实当前权重（供学习器读取旧权重）。
+
+        Args:
+            category_id: 类目 ID
+            prompt: 提示词文本
+            exclude_shadow: 是否排除 source='shadow' 的影子提示词（默认排除）
+
+        Returns:
+            权重 float；若该 prompt 在库中不存在（如未知检测类目）则返回 None。
+        """
+        sql = """
+        SELECT weight FROM category_prompts
+        WHERE category_id = ? AND prompt = ?
+        """
+        if exclude_shadow:
+            sql += " AND source != 'shadow'"
+        sql += " ORDER BY weight DESC LIMIT 1"
+        cur = self.execute(sql, (category_id, prompt))
+        row = cur.fetchone()
+        return float(row["weight"]) if row else None
+
 
 # ========== 辅助函数 ==========
 
-def create_db_manager(db_path: str = "webui/data/adaptive_semantics.db") -> DBManager:
+def create_db_manager(db_path: Optional[str] = None) -> DBManager:
     """
-    创建数据库管理器（单例模式，可选）
-    
+    创建数据库管理器（工厂）。
+
+    **调用时**解析 ADAPTIVE_DB_PATH 环境变量：未显式传入 db_path 时，
+    优先使用环境变量，便于测试隔离与生产覆盖。
+
     Args:
-        db_path: 数据库路径
-    
+        db_path: 数据库路径；为 None 时按 ADAPTIVE_DB_PATH 环境变量解析，
+                 再回退到默认相对路径。
+
     Returns:
         DBManager 实例
     """
+    if db_path is None:
+        db_path = os.environ.get(
+            "ADAPTIVE_DB_PATH", "webui/data/adaptive_semantics.db"
+        )
     return DBManager(db_path)

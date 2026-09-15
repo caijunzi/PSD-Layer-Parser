@@ -29,8 +29,10 @@ def attribute_reject_to_prompt(
     Returns:
         List of (prompt, category_id, signal, reason) tuples:
         - prompt: 检测时使用的 prompt 文本
-        - category_id: 类目 ID（layer_name）
+        - category_id: 规范类目 ID（优先 det.category_id，否则回退 layer_name；
+          二者皆缺则为 "unknown"）
         - signal: "accept" | "quality_reject" | "diffuse_reject"
+          （质量门/弥散门字段缺失视为未通过，不得默认通过）
         - reason: 拒绝原因（accept 时为空字符串）
         
     Example:
@@ -53,28 +55,42 @@ def attribute_reject_to_prompt(
     
     attributions = []
     for det in dino_detections:
-        layer_name = det.get("layer_name", "")
         prompt = det.get("prompt", "")
-        
-        if not layer_name or not prompt:
-            continue
-        
+        # 规范 category_id 优先；缺省回退 layer_name（保持旧契约）；二者皆缺 → 显式 unknown
+        category_id = det.get("category_id") or det.get("layer_name") or "unknown"
+        layer_name = det.get("layer_name", "")
+
+        if not category_id or category_id == "unknown" or not prompt:
+            # 仍记录（便于调试），但 category_id 显式为 unknown
+            if not prompt:
+                continue
+
         # 判断信号类型：质量门拒绝 > 弥散门拒绝 > 接受
-        quality_passed = det.get("quality_gate_passed", True)
-        diffuse_passed = det.get("diffuse_gate_passed", True)
-        
-        if not quality_passed:
+        # 质量门/弥散门缺字段（未评估）一律视为未通过，不得默认通过
+        quality_passed = det.get("quality_gate_passed")
+        diffuse_passed = det.get("diffuse_gate_passed")
+        quality_reason = det.get("quality_gate_reason")
+        diffuse_reason = det.get("diffuse_gate_reason")
+
+        if quality_passed is False:
             signal = "quality_reject"
-            reason = det.get("quality_gate_reason", "未知原因")
-        elif not diffuse_passed:
+            reason = quality_reason or "质量门未通过"
+        elif quality_passed is None:
+            # 质量门字段缺失 = 未评估 → 不能默认通过
+            signal = "quality_reject"
+            reason = quality_reason or "质量门缺字段(未评估)"
+        elif diffuse_passed is False:
             signal = "diffuse_reject"
-            reason = det.get("diffuse_gate_reason", "未知原因")
+            reason = diffuse_reason or "弥散门未通过"
+        elif diffuse_passed is None:
+            signal = "diffuse_reject"
+            reason = diffuse_reason or "弥散门缺字段(未评估)"
         else:
             signal = "accept"
             reason = ""
-        
-        attributions.append((prompt, layer_name, signal, reason))
-    
+
+        attributions.append((prompt, category_id, signal, reason))
+
     return attributions
 
 
@@ -109,41 +125,42 @@ def extract_accept_reject_signals(
     
     signals = {}
     for det in dino_detections:
-        layer_name = det.get("layer_name", "")
         prompt = det.get("prompt", "")
-        
-        if not layer_name or not prompt:
+        # 规范 category_id 优先；缺省回退 layer_name；二者皆缺 → 显式 unknown
+        category_id = det.get("category_id") or det.get("layer_name") or "unknown"
+
+        if not category_id or not prompt:
             continue
-        
+
         # 初始化类目统计
-        if layer_name not in signals:
-            signals[layer_name] = {
+        if category_id not in signals:
+            signals[category_id] = {
                 "n_accept": 0,
                 "n_quality_reject": 0,
                 "n_diffuse_reject": 0,
                 "prompts": {}
             }
-        
+
         # 初始化 prompt 统计
-        if prompt not in signals[layer_name]["prompts"]:
-            signals[layer_name]["prompts"][prompt] = {
+        if prompt not in signals[category_id]["prompts"]:
+            signals[category_id]["prompts"][prompt] = {
                 "n_accept": 0,
                 "n_quality_reject": 0,
                 "n_diffuse_reject": 0
             }
-        
-        # 统计信号
-        quality_passed = det.get("quality_gate_passed", True)
-        diffuse_passed = det.get("diffuse_gate_passed", True)
-        
-        if not quality_passed:
-            signals[layer_name]["n_quality_reject"] += 1
-            signals[layer_name]["prompts"][prompt]["n_quality_reject"] += 1
-        elif not diffuse_passed:
-            signals[layer_name]["n_diffuse_reject"] += 1
-            signals[layer_name]["prompts"][prompt]["n_diffuse_reject"] += 1
+
+        # 统计信号；质量门/弥散门缺字段视为未通过（不得默认通过）
+        quality_passed = det.get("quality_gate_passed")
+        diffuse_passed = det.get("diffuse_gate_passed")
+
+        if quality_passed is False or quality_passed is None:
+            signals[category_id]["n_quality_reject"] += 1
+            signals[category_id]["prompts"][prompt]["n_quality_reject"] += 1
+        elif diffuse_passed is False or diffuse_passed is None:
+            signals[category_id]["n_diffuse_reject"] += 1
+            signals[category_id]["prompts"][prompt]["n_diffuse_reject"] += 1
         else:
-            signals[layer_name]["n_accept"] += 1
-            signals[layer_name]["prompts"][prompt]["n_accept"] += 1
-    
+            signals[category_id]["n_accept"] += 1
+            signals[category_id]["prompts"][prompt]["n_accept"] += 1
+
     return signals

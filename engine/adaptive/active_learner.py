@@ -207,6 +207,38 @@ def get_pending_feedbacks(
     return pending_requests
 
 
+def get_feedback_request(
+    feedback_request_id: str,
+    pending_path: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """按 feedback_request_id 读取单条待审请求（用于幂等/重复应用判定）。
+
+    Args:
+        feedback_request_id: 反馈请求 ID
+        pending_path: 待审队列文件路径
+
+    Returns:
+        请求字典；不存在时返回 None
+    """
+    pending_file = Path(pending_path or default_pending_path())
+    if not pending_file.exists():
+        return None
+
+    with pending_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if req.get("feedback_request_id") == feedback_request_id:
+                return req
+
+    return None
+
+
 def mark_feedback_reviewed(
     feedback_request_id: str,
     user_action: str,
@@ -308,6 +340,14 @@ def apply_feedback_to_category(
         cur = conn.cursor()
 
         if user_action == "accept":
+            # 反馈规范：DB ID 必须存在（且未软删），否则明确失败，不静默成功
+            exists = cur.execute(
+                "SELECT 1 FROM categories WHERE id = ? AND deleted_at IS NULL",
+                (category_id,),
+            ).fetchone()
+            if not exists:
+                return _fail(f"类目不存在（或已软删）：{category_id}")
+
             cur.execute(
                 """
                 UPDATE category_prompts
@@ -316,6 +356,11 @@ def apply_feedback_to_category(
                 """,
                 (category_id,),
             )
+            # 反馈规范：rowcount 为零（无 prompt 可升权）→ 必须失败，不谎称成功
+            if cur.rowcount == 0:
+                conn.rollback()
+                return _fail(f"类目 {category_id} 无 prompt 可升权（rowcount=0）")
+
             conn.commit()
             result["ok"] = True
             result["detail"] = f"权重 ×1.1（影响 {cur.rowcount} 条 prompt）"
@@ -459,7 +504,10 @@ def apply_feedback_to_category(
                     "detail": result["detail"],
                     "user_data": user_data or {},
                 },
-                regression_status="passed",
+                # 受审反馈已应用，但**尚未跑回归验证**——如实登记为 pending，
+                # 不得谎称 "passed"（否则会误导回滚/验收）。版本仍登记并（可）激活，
+                # 但 regression_status 真实反映「待回归验证」状态。
+                regression_status="pending",
                 activate=True,
             )
             mgr.close()

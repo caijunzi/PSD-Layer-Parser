@@ -9,9 +9,13 @@
   ③ 实例重复      同类实例掩模 IoU > 0.9 视为重复
   ④ 内容承载      「底板抹除但无层承载」的墨迹占比（内容丢失风险）
   ⑤ 合成等价性    全层叠加 vs 原图（多尺度 RMSE，超分差异有容忍）
-  ⑥ 底板纯净度    分区域 dark 率（金地底板应为纯金箔）
-  ⑦ plate 合规    CMYK 模式 / TAC ≤ 300% / 纯净性（仅 plate 产物）
+  ⑥ 底板纯净度    分区域 dark 率（底版应为纯净/均匀，产品线无关）
+  ⑦ plate 合规    CMYK 模式 / TAC ≤ 300% / 纯净性（仅 plate 产物；design 不适用）
   ⑧ manifest 一致 声明层数/层名集合 == PSB 实际
+
+每个维度在返回里带 evaluated（是否真正用数据核验过）/ na（本产品线不适用，
+如 design 线的 ⑦ plate 合规）标志，供 episode 严格准入判断，避免把
+"未核验/不适用"误判为通过。
 
 用法：
     python tools/audit_psb.py <result.psb> [--manifest m.json] [--source src.jpg] [--json out.json]
@@ -56,23 +60,37 @@ TH = {
 REGIONS = {
     "雁群区": (0.20, 0.16, 0.45, 0.34), "石矶区": (0.42, 0.62, 0.52, 0.72),
     "右侧山峦": (0.60, 0.35, 0.90, 0.70), "中央枯树": (0.40, 0.30, 0.55, 0.60),
-    "纯金地": (0.05, 0.30, 0.15, 0.45), "右下岩石": (0.70, 0.60, 0.95, 0.85),
+    "底色区": (0.05, 0.30, 0.15, 0.45), "右下岩石": (0.70, 0.60, 0.95, 0.85),
 }
+# 这些区域框是**构图先验**（山水图实测校准），仅作 dark 率披露，不参与任何判定，
+# 也不假定底版一定是金地。换品类时这些框不具意义，但纯披露不影响门禁。
+
+# 与 engine/adaptive/episode_archiver.py 严格准入保持一致的 8 维键（顺序即维度序）
+DIM_KEYS = ("① 层属性", "② 分辨率真实性", "③ 实例重复", "④ 内容承载",
+            "⑤ 合成等价性", "⑥ 底板纯净度", "⑦ plate 合规", "⑧ manifest 一致")
+# 仅 PLATE 产品线需要的维度（design 线该维度不适用 na）
+PLATE_DIM = "⑦ plate 合规"
 
 
 def _clean(name: str) -> str:
     return str(name).strip().rstrip("\x00")
 
 
-# 底板层判定关键词（2026-09-13 统一）：④ 与 ⑥ 必须用同一口径，
-# 否则新预设（如 01_纯净画布底板_Base_Ground）会被 ④ 判为"未找到底板"而静默跳过检查。
-BASE_KEYWORDS = ("Gold_Base", "Fabric_Base", "Base_Ground", "底板")
+# 底板层判定关键词（产品线无关：金地/壁布/水墨/油画等均可，不写死"金地"）。
+# 命中任意一个即视为底板层；不要求特定命名。设计稿底色层命名为「底版/底板」也可命中。
+DEFAULT_BASE_KEYWORDS = ("Base_Ground", "底版", "底板", "Substrate",
+                         "Gold_Base", "Fabric_Base")
 
 
-def _find_base_layer(layers):
-    """按统一关键词定位底板层（与 ⑥ 同口径）。"""
+def _find_base_layer(layers, base_keywords=None):
+    """按统一关键词定位底板层（与 ⑥ 同口径）。
+
+    base_keywords 可被子类/调用方覆盖，默认产品线无关的关键词集合，
+    避免把底板命名写死成「金地」。
+    """
+    keys = base_keywords or DEFAULT_BASE_KEYWORDS
     return next((ly for ly in layers
-                 if any(k in _clean(ly.name) for k in BASE_KEYWORDS)), None)
+                 if any(k in _clean(ly.name) for k in keys)), None)
 
 
 def _alpha(a: np.ndarray) -> np.ndarray:
@@ -87,6 +105,38 @@ def _full_mask(ly, H: int, W: int) -> np.ndarray:
     h, w = m.shape
     f[y0:y0 + h, x0:x0 + w] = m[:max(0, H - y0), :max(0, W - x0)]
     return f
+
+
+def _composite_rmse(psd, source_bgr, target_long: int = 1600):
+    """用 psd_tools 真实渲染（尊重每层的 opacity / blend 模式 / CMYK 分色）合成整图，
+    再与源图（统一到同一色彩空间）比对，返回 (原始 RMSE, 低频 RMSE)。
+
+    关键修复（2026-09-15）：此前用手工 alpha-over（`rgb*alpha + bg*(1-alpha)`）逐层叠加，
+    **完全忽略图层不透明度与混合模式**，且对 CMYK 产物按 RGB 处理会失真。现改用
+    `psd.composite()` —— 这是 psd_tools 的权威渲染路径，会按 PSD 内嵌的 opacity/blend
+    正确叠加；CMYK 产物返回 CMYK 图，与转成 CMYK 的源图同空间比对，避免色彩空间错配。
+    """
+    from PIL import Image
+    import cv2
+
+    comp = psd.composite()  # 原生色彩模式（CMYK 或 RGB），由 psd_tools 负责 opacity/blend
+    src = Image.fromarray(cv2.cvtColor(source_bgr, cv2.COLOR_BGR2RGB))
+    # 统一到合成图所在的色彩空间，公平比对（CMYK 产物↔CMYK 源，RGB 产物↔RGB 源）
+    ref = src.convert(comp.mode) if comp.mode != src.mode else src
+
+    scale = min(1.0, target_long / max(comp.size))
+    if scale < 1.0:
+        new_size = (max(1, int(comp.size[0] * scale)), max(1, int(comp.size[1] * scale)))
+        comp = comp.resize(new_size, Image.BILINEAR)
+        ref = ref.resize(new_size, Image.BILINEAR)
+
+    ca = np.asarray(comp, dtype=np.float32)
+    ra = np.asarray(ref, dtype=np.float32)
+    raw = float(np.sqrt(((ca - ra) ** 2).mean()))
+    ca16 = cv2.GaussianBlur(ca, (0, 0), 16)
+    ra16 = cv2.GaussianBlur(ra, (0, 0), 16)
+    low = float(np.sqrt(((ca16 - ra16) ** 2).mean()))
+    return raw, low
 
 
 def audit(psb_path: str, manifest_path: str | None = None,
@@ -203,49 +253,20 @@ def audit(psb_path: str, manifest_path: str | None = None,
         d["metrics"]["note"] = "未提供源图，跳过"
     dims["④ 内容承载"] = d
 
-    # ⑤ 合成等价性（缩采样内存合成）
+    # ⑤ 合成等价性（真实合成：psd_tools 渲染，尊重每层的 opacity / blend / CMYK）
     d = {"passed": True, "metrics": {}, "issues": []}
     if source_image and os.path.isfile(source_image):
-        import cv2
-        from engine.core.io_utils import imread_unicode
-        TW = 1600
-        scale = TW / W
-        TH_, TW_ = int(H * scale), TW
-        canvas = np.zeros((TH_, TW_, 3), np.float32)
-        for ly in reversed(layers):          # psd_tools 列表 = 从顶到底 → 反转成底→顶
-            if not ly.visible:
-                continue
-            b = ly.bbox
-            bw, bh = b[2] - b[0], b[3] - b[1]
-            if bw <= 0 or bh <= 0:
-                continue
-            a = ly.numpy()
-            rgb = a[:, :, :3].astype(np.float32)
-            al = a[:, :, 3].astype(np.float32)
-            if al.max() > 1.001:
-                rgb, al = rgb / 255.0, al / 255.0
-            tw, th = max(1, int(round(bw * scale))), max(1, int(round(bh * scale)))
-            rgb_s = cv2.resize(rgb, (tw, th), interpolation=cv2.INTER_AREA)
-            al_s = np.clip(cv2.resize(al, (tw, th), interpolation=cv2.INTER_AREA), 0, 1)[:, :, None]
-            tx, ty = int(round(b[0] * scale)), int(round(b[1] * scale))
-            tx2, ty2 = min(TW_, tx + tw), min(TH_, ty + th)
-            tw, th = tx2 - tx, ty2 - ty
-            if tw <= 0 or th <= 0:
-                continue
-            region = canvas[ty:ty2, tx:tx2]
-            canvas[ty:ty2, tx:tx2] = rgb_s[:th, :tw] * al_s[:th, :tw] + region * (1 - al_s[:th, :tw])
-        synth = (np.clip(canvas, 0, 1) * 255).astype(np.uint8)
-        ref = cv2.resize(cv2.cvtColor(imread_unicode(source_image), cv2.COLOR_BGR2RGB), (TW_, TH_),
-                         interpolation=cv2.INTER_AREA)
-        # 多尺度（原始 + 低频）
-        raw_rmse = float(np.sqrt(((synth.astype(np.float32) - ref.astype(np.float32)) ** 2).mean()))
-        a16 = cv2.GaussianBlur(synth, (0, 0), 16).astype(np.float32)
-        b16 = cv2.GaussianBlur(ref, (0, 0), 16).astype(np.float32)
-        low_rmse = float(np.sqrt(((a16 - b16) ** 2).mean()))
-        d["metrics"].update(rmse_raw=round(raw_rmse, 2), rmse_lowfreq=round(low_rmse, 2))
-        if low_rmse > TH["synth_rmse_lowfreq"] or raw_rmse > TH["synth_rmse_raw"]:
-            d["passed"] = False
-            d["issues"].append(f"合成与原图差异偏大（低频RMSE={low_rmse:.1f}, 原始RMSE={raw_rmse:.1f}）")
+        try:
+            from engine.core.io_utils import imread_unicode
+            src_bgr = imread_unicode(source_image)
+            raw_rmse, low_rmse = _composite_rmse(psd, src_bgr, target_long=1600)
+            d["metrics"].update(rmse_raw=round(raw_rmse, 2), rmse_lowfreq=round(low_rmse, 2))
+            if low_rmse > TH["synth_rmse_lowfreq"] or raw_rmse > TH["synth_rmse_raw"]:
+                d["passed"] = False
+                d["issues"].append(f"合成与原图差异偏大（低频RMSE={low_rmse:.1f}, 原始RMSE={raw_rmse:.1f}）")
+        except Exception as e:
+            d["metrics"]["note"] = f"合成比对异常（{type(e).__name__}），跳过"
+            d["evaluated"] = False
     else:
         d["metrics"]["note"] = "未提供源图，跳过"
     dims["⑤ 合成等价性"] = d
@@ -259,7 +280,7 @@ def audit(psb_path: str, manifest_path: str | None = None,
     base_ly = _find_base_layer(layers)
     if base_ly is None:
         d["passed"] = False
-        d["issues"].append("缺少底板层（Gold_Base/Fabric_Base/Base_Ground/底板 关键词均未命中）")
+        d["issues"].append("缺少底板层（Base_Ground/底版/底板/Substrate/Gold_Base/Fabric_Base 关键词均未命中）")
     else:
         import cv2
         ba = base_ly.numpy()
@@ -357,6 +378,27 @@ def audit(psb_path: str, manifest_path: str | None = None,
     else:
         d["metrics"]["note"] = "未提供 manifest，跳过"
     dims["⑧ manifest 一致"] = d
+
+    # ===== 标注每个维度的「是否真正用数据核验(evaluated)」与「是否本产品线不适用(na)」 =====
+    # 供 episode 严格准入判断：未核验/不适用绝不能当"通过"。阈值本身（passed 取值）
+    # 完全沿用上面各维计算，这里不降低任何重建质量阈值。
+    no_src = not (source_image and os.path.isfile(source_image))
+    no_manifest = not (manifest_path and os.path.isfile(manifest_path))
+    if no_src:
+        dims["④ 内容承载"]["evaluated"] = False
+        dims["⑤ 合成等价性"]["evaluated"] = False
+    if not is_cmyk:
+        # design 线（RGB）：⑦ plate 合规本身不适用，明确标 na，且不做核验判定
+        dims["⑦ plate 合规"]["na"] = True
+        dims["⑦ plate 合规"]["evaluated"] = False
+    if no_manifest:
+        # 无 manifest 无法核验 TAC/纯净性（⑦）与层清单一致性（⑧）→ 视为未核验
+        if is_cmyk:
+            dims["⑦ plate 合规"]["evaluated"] = False
+        dims["⑧ manifest 一致"]["evaluated"] = False
+    for _k, _v in dims.items():
+        _v.setdefault("evaluated", True)
+        _v.setdefault("na", False)
 
     # 汇总
     failed = [k for k, v in dims.items() if not v.get("passed")]

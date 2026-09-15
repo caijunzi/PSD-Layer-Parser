@@ -269,9 +269,11 @@ class TaskManager:
                 })
 
     async def _run_delivery_audit(self, task_id: str, out_dir: Path, cfg: dict) -> None:
-        """交付前 8 维审计门（异步）：落盘 result.audit.json + WS 推送摘要。
+        """交付前 8 维审计门（异步）：逐产物审计 + 落盘 + WS 推送 + 回填对应 episode。
 
         审计门见 tools/audit_psb.py；阈值已按 V2 参照产物校准。
+        both 模式对 plate / design 两个产物分别审计，各自回填到**对应** episode
+        （不再用末条日志猜 episode，见 _finalize_artifacts）。
         """
         try:
             import sys
@@ -280,40 +282,54 @@ class TaskManager:
                 sys.path.insert(0, str(_root))
             from tools.audit_psb import audit as run_audit
 
-            psb = next((p for p in (out_dir / "result.plate.psb", out_dir / "result.psb",
-                                    out_dir / "result.design.psb") if p.is_file()), None)
-            if psb is None:
-                return
-            manifest = next((p for p in (out_dir / "result.plate.manifest.json",
-                                         out_dir / "result.manifest.json",
-                                         out_dir / "result.design.manifest.json") if p.is_file()), None)
+            mode = cfg.get("mode", "both")
+            # both 模式两个产物分别审计；单模式只有一个产物
+            if mode == "both":
+                cands = [("result.plate.psb", "plate"), ("result.design.psb", "design")]
+                man_cands = ["result.plate.manifest.json", "result.design.manifest.json",
+                             "result.manifest.json"]
+            else:
+                cands = [("result.psb", mode)]
+                man_cands = [f"result.{mode}.manifest.json", "result.manifest.json"]
+
             src = self._resolve_input(cfg.get("file_id", ""))
-            res = await asyncio.to_thread(
-                run_audit, str(psb),
-                str(manifest) if manifest else None,
-                str(src) if src else None,
-                False,
-            )
-            (out_dir / "result.audit.json").write_text(
-                json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+            audit_reports: dict = {}   # psb_path_str -> (report, output_mode)
+            for fname, om in cands:
+                psb = out_dir / fname
+                if not psb.is_file():
+                    continue
+                manifest = next((out_dir / n for n in man_cands if (out_dir / n).is_file()), None)
+                res = await asyncio.to_thread(
+                    run_audit, str(psb),
+                    str(manifest) if manifest else None,
+                    str(src) if src else None,
+                    False,
+                )
+                # 由审计 color_mode 确定真实产品线（cmyk=plate, rgb=design），
+                # 不依赖日志顺序猜 episode。
+                real_om = "plate" if res.get("color_mode") == "cmyk" else "design"
+                if mode != "both":
+                    real_om = om
+                audit_reports[str(psb)] = (res, real_om)
 
-            # 审计完成后：回填审计结果到 episode 并重建 CBR 索引。
-            # 修复（2026-09-15）：引擎归档发生在审计之前（审计此时尚不存在），
-            # 导致 episode 的 audit_passed 恒为 False、CBR 检索永远筛空。
-            # 此处从任务日志里取 episode_id（引擎归档时打印），回填后重建索引。
-            self._backfill_episode_audit(task_id, out_dir)
+                # 落盘（both 模式按产品线分文件，便于回放）
+                out_name = ("result.audit." + real_om + ".json") if mode == "both" else "result.audit.json"
+                (out_dir / out_name).write_text(
+                    json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
 
-            if isinstance(res, dict):
-                res = dict(res)
-                res["has_report"] = True
-            await ws_manager.broadcast(task_id, {
-                "type": "audit", "task_id": task_id,
-                "passed": res.get("passed"),
-                "dims": {k: {"passed": v.get("passed"), "metrics": v.get("metrics")}
-                         for k, v in res.get("dims", {}).items()},
-                "issues": res.get("issues", []),
-                "download_url": f"/api/download/{task_id}/audit",
-            })
+                # WS 推送（携带 output_mode，前端可区分 plate/design 两份审计）
+                if isinstance(res, dict):
+                    await ws_manager.broadcast(task_id, {
+                        "type": "audit", "task_id": task_id, "output_mode": real_om,
+                        "passed": res.get("passed"),
+                        "dims": {k: {"passed": v.get("passed"), "metrics": v.get("metrics")}
+                                 for k, v in res.get("dims", {}).items()},
+                        "issues": res.get("issues", []),
+                        "download_url": f"/api/download/{task_id}/audit",
+                    })
+
+            # 逐产物回填到对应 episode 并严格准入 CBR 索引
+            self._finalize_artifacts(task_id, out_dir, audit_reports, mode)
         except Exception as e:  # 审计异常不得影响任务本身
             try:
                 await ws_manager.broadcast(task_id, {
@@ -323,42 +339,57 @@ class TaskManager:
             except Exception:
                 pass
 
-    def _backfill_episode_audit(self, task_id: str, out_dir: Path) -> None:
-        """把本次任务的审计 8 维回填到对应 episode，并重建 CBR 指纹索引。
+    def _finalize_artifacts(self, task_id: str, out_dir: Path, audit_reports: dict,
+                           mode: str = "both") -> None:
+        """逐产物把审计报告回填到**对应** episode 并严格准入 CBR 索引。
 
-        全程 try 包裹：CBR 属旁路能力，失败不得影响任务与产物。
+        修复（2026-09-15）：旧 `_backfill_episode_audit` 只审计单个产物（偏好 plate），
+        却用「末条 episode 日志」回填——both 模式下末条是 design episode，导致
+        plate 审计被错填到 design episode。现改为：每个产物由审计 color_mode 确定真实
+        产品线，再与引擎归档顺序（jobs=[PLATE, DESIGN] → ep_ids[0]=plate, [1]=design）
+        明确一一对应；数量不符时**不猜**，跳过回填以免错填。
         """
         try:
             task = self.tasks.get(task_id) or {}
-            ep_id = None
-            for lg in reversed(task.get("logs", [])):
+            ep_ids = []
+            for lg in task.get("logs", []):
                 m = re.search(r"episode 已归档:\s*(\S+)", lg.get("message", ""))
                 if m:
-                    ep_id = m.group(1)
-                    break
-            if not ep_id:
+                    ep_ids.append(m.group(1))
+            if not ep_ids:
                 return
 
             import sys as _sys
             _root = Path(__file__).resolve().parents[3]
             if str(_root) not in _sys.path:
                 _sys.path.insert(0, str(_root))
+            from engine.adaptive.episode_archiver import finalize_episode
 
-            from engine.adaptive.episode_archiver import (
-                update_episode_audit,
-                sync_index_from_log,
-            )
-            from engine.adaptive.regression_tester import extract_audit_8d
+            arts = [(psb, om, res) for psb, (res, om) in audit_reports.items()]
+            pairs = []
+            if mode == "both" and len(arts) == 2 and len(ep_ids) >= 2:
+                # 与引擎归档顺序对齐：ep_ids[0]=plate, ep_ids[1]=design
+                pairs = [(arts[0][0], arts[0][1], arts[0][2], ep_ids[0]),
+                         (arts[1][0], arts[1][1], arts[1][2], ep_ids[1])]
+            else:
+                # 单模式 / 部分产物：用产物真实产品线匹配对应序位 episode
+                for psb, om, res in arts:
+                    if om == "plate" and ep_ids:
+                        ep = ep_ids[0]
+                    elif om == "design" and ep_ids:
+                        ep = ep_ids[-1]
+                    elif ep_ids:
+                        ep = ep_ids[0]
+                    else:
+                        continue
+                    pairs.append((psb, om, res, ep))
 
-            audit_json = out_dir / "result.audit.json"
-            if not audit_json.is_file():
-                return
-            audit_8d = extract_audit_8d(str(audit_json))
-            if update_episode_audit(ep_id, audit_8d):
-                n = sync_index_from_log()
-                print(f"[TaskManager] CBR 索引已按真实审计重建：{n} 条（episode={ep_id}）")
+            for psb, om, res, ep in pairs:
+                dec = finalize_episode(ep, audit_report=res, output_mode=om, artifact=psb)
+                print(f"[TaskManager] episode {ep} ({om}) 准入: "
+                      f"admitted={dec.get('admitted')} reason={dec.get('reason')}")
         except Exception as e:  # 旁路失败静默
-            print(f"[TaskManager] 审计回填 episode 失败（不影响任务）: {e}")
+            print(f"[TaskManager] 逐产物回填失败（不影响任务）: {e}")
 
     def _resolve_input(self, file_id: str) -> Optional[Path]:
         """根据 file_id 找上传文件（扩展名未知，glob）。"""

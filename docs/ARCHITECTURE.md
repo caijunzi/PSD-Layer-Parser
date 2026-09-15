@@ -216,15 +216,15 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 | :--- | :--- | :--- |
 | **episode 存储** | 文件系统 JSONL（`webui/data/*.jsonl`），**不建 `episodes` 表** | Stage 3/4 实际已用 JSONL，回补表需双写且零收益 |
 | **人审通信** | 轮询 `GET /api/adaptive/pending-feedbacks`（前端 3s） | FastAPI 无 WS/SSE 基建；轮询零新依赖、延迟 ≤3s 够用 |
-| **`inherit_priors()`** | 跳过实现，标 TODO | `category_priors` 表为空（0 条），手写 seed 是"拍脑袋" |
+| **`inherit_priors()`** | 空表时优雅跳过，有真实先验时复制 | `category_priors` 当前为空；不写未经验证的 seed，避免污染类目先验 |
 
 > ⚠️ **注意**：`01-architecture.md` 中描述的 `episodes` 数据库表与 WebSocket/SSE 推送
 > **均未落地**，实际以本节与 `03-implementation-plan.md` 的修正注记为准。
 
-### 8.4 测试基线（2026-09-14）
+### 8.4 测试基线（2026-09-15）
 
-引擎全量：**152 passed / 2 skipped**（含 Stage 4 CBR 7 + Stage 5.1 树 7 + Stage 5.2 主动 7 +
-Stage 5 e2e 14 + 接线守卫 10）；WebUI：**28 OK**。
+引擎全量：**209 passed / 2 skipped**；WebUI：**34 passed**。
+专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。九样本首轮 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-final/results.json`；油画 preset 修复后的独立 cold/repeat 复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`，两次均通过 8 维审计。
 
 ### 8.5 测试环境（重要）
 

@@ -11,10 +11,10 @@ from typing import Tuple, Dict
 def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
     """
     材质家族判别（规则方式，Stage 1）
-    
+
     Args:
         fingerprint: extract_fingerprint 返回的字典
-    
+
     Returns:
         (family_name, confidence)
         family_name: "金地屏风" / "宣纸水墨" / "绢本工笔" / "油画布" / "其他"
@@ -24,7 +24,7 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
     required = ["global_features", "texture_features", "structure_features"]
     if not all(k in fingerprint for k in required):
         return "其他", 0.1  # 降级兜底
-    
+
     global_feats = fingerprint["global_features"]
     texture_feats = fingerprint["texture_features"]
     structure_feats = fingerprint["structure_features"]
@@ -44,14 +44,14 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
         "油画布": _score_oil_canvas(cL, csat, edge_density),
         "其他": 0.3,  # 兜底分数
     }
-    
+
     # 选择最高分
     family_name = max(scores, key=scores.get)
     confidence = scores[family_name]
-    
+
     # 归一化置信度（确保 0..1）
     confidence = np.clip(confidence, 0.0, 1.0)
-    
+
     return family_name, float(confidence)
 
 
@@ -128,7 +128,12 @@ def _score_ink_paper(cL: float, cb: float, saturation: float,
     elif glcm_energy < 0.28:
         score += 0.10
 
-    return score
+    # 暖色、细腻且纹理明显的中心主体更符合绢本工笔；此时不能继续
+    # 给宣纸水墨满分，否则真实绢本会被高 GLCM 误吸到水墨族。
+    if 14 <= cb <= 24 and saturation >= 14 and glcm_energy >= 0.34 and edge_density >= 0.08:
+        score -= 0.20
+
+    return max(0.0, score)
 
 
 def _score_silk_painting(cL: float, cb: float, saturation: float,
@@ -138,8 +143,10 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
 
     中心区口径重标定（2026-09-15）。区分点：绢本/织物纹理**稠密**
     （edge ≥ 0.16，且此时 glcm ≥ 0.28 再加权），据此与写意水墨拉开差距。
-    ⚠️ 仍无**绢本真值样本**（仅有织物 damask 作近邻参照：edge0.203/glcm0.337）；
-    阈值由"织物 vs 水墨"实测对比确定，待补绢本样本后再校。
+    已用 `inputs/绢本工笔画-1.jpeg` 与 `inputs/绢本工笔画-2.jpeg` 真值校准：
+    两者中心特征分别为 edge/glcm=`0.0915/0.4295`、`0.1234/0.3466`。
+    真绢本不一定有织物样本那么高的边缘密度，因此增加“暖色绢地 + 细腻纹理”分支；
+    仍保留 edge≥0.16 的密集织物分支，并用 edge 前置约束防止水墨误判。
     """
     score = 0.0
 
@@ -168,6 +175,15 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
         score += 0.30
     elif dense and glcm_energy >= 0.22:
         score += 0.05
+
+    # 真绢本工笔的中心主体可能是浅色、边缘中等，但纹理能量明显高于
+    # 写意水墨；要求 b* / 饱和度同时达到暖绢地范围，避免仅凭 glcm
+    # 把明代水墨（edge=0.123, glcm=0.325）推成绢本。
+    warm_silk = 14 <= cb <= 24 and saturation >= 14 and glcm_energy >= 0.34
+    if warm_silk:
+        score += 0.35
+    elif 14 <= cb <= 24 and saturation >= 14 and glcm_energy >= 0.30 and edge_density >= 0.08:
+        score += 0.15
 
     return score
 
@@ -211,19 +227,19 @@ def get_material_families() -> list:
 def explain_classification(fingerprint: Dict, family_name: str, confidence: float) -> str:
     """
     解释分类结果（调试用）
-    
+
     Returns:
         人类可读的分类依据说明
     """
     global_feats = fingerprint["global_features"]
     texture_feats = fingerprint["texture_features"]
     structure_feats = fingerprint["structure_features"]
-    
+
     bg_L, bg_a, bg_b = global_feats["bg_median_LAB"]
     saturation = global_feats["saturation"]
     edge_density = structure_feats["edge_density"]
     glcm_energy = texture_feats["glcm_energy"]
-    
+
     explanation = f"分类结果：{family_name}（置信度 {confidence:.2f}）\n\n"
     explanation += f"关键特征：\n"
     explanation += f"  - 背景亮度（L*）: {bg_L:.1f}\n"
@@ -231,7 +247,7 @@ def explain_classification(fingerprint: Dict, family_name: str, confidence: floa
     explanation += f"  - 饱和度: {saturation:.1f}\n"
     explanation += f"  - 边缘密度: {edge_density:.4f}\n"
     explanation += f"  - GLCM 能量: {glcm_energy:.3f}\n\n"
-    
+
     explanation += f"判别依据：\n"
     if family_name == "金地屏风":
         explanation += f"  - 高亮度（L* > 80）✓\n" if bg_L > 80 else f"  - 高亮度（L* > 80）✗\n"
@@ -250,5 +266,5 @@ def explain_classification(fingerprint: Dict, family_name: str, confidence: floa
         explanation += f"  - 厚重笔触✓\n" if edge_density > 0.08 else f"  - 厚重笔触✗\n"
     else:
         explanation += f"  - 未匹配任何特定材质，归入兜底类\n"
-    
+
     return explanation

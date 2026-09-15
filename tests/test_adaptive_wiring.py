@@ -123,7 +123,7 @@ class TestLearningProducesAttribution(unittest.TestCase):
                 "diffuse_gate_passed": False,
                 "diffuse_gate_reason": "弥散",
             },
-            {"layer_name": "印章", "prompt": "seal", "quality_gate_passed": True},
+            {"layer_name": "印章", "prompt": "seal", "quality_gate_passed": True, "diffuse_gate_passed": True},
         ]
         result = SemanticLearner().learn_from_episode(
             {"episode_id": "wiring_test", "category_ids": ["人物", "远山", "印章"], "dino_detections": dino}
@@ -135,15 +135,16 @@ class TestLearningProducesAttribution(unittest.TestCase):
             signals, {"quality_reject", "diffuse_reject", "accept"}, f"信号类型不全：{signals}"
         )
 
-    def test_learn_with_wrong_field_yields_zero(self):
-        """若误用 category_id（非 layer_name）则归因为空 —— 记录此契约，便于排错"""
+    def test_learn_with_canonical_category_id(self):
+        """规范 category_id 可直接归因；layer_name 保留用于产物追溯。"""
         from engine.adaptive.learner import SemanticLearner
 
         dino = [{"category_id": "人物", "prompt": "red stamp", "quality_gate_passed": False}]
         result = SemanticLearner().learn_from_episode(
             {"episode_id": "x", "category_ids": ["人物"], "dino_detections": dino}
         )
-        self.assertEqual(len(result.get("attributions") or []), 0)
+        self.assertEqual(result["attributions"][0]["category_id"], "人物")
+        self.assertEqual(result["attributions"][0]["signal"], "quality_reject")
 
 
 if __name__ == "__main__":

@@ -775,6 +775,7 @@ class GroundedSAMProvider:
                 # Stage 3（反馈闭环）：记录检测信息供归因使用
                 self.dino_detections.append({
                     "layer_name": layer_name,
+                    "category_id": cls_info.get("category_id"),
                     "prompt": prompt,
                     "boxes": boxes.cpu().numpy().tolist() if hasattr(boxes, "cpu") else boxes.tolist(),
                     "logits": logits.cpu().numpy().tolist() if hasattr(logits, "cpu") else logits.tolist(),

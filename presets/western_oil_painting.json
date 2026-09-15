@@ -9,7 +9,7 @@
         "color_mode": "rgb"
     },
     "dpi": 150.0,
-    "bg_layer_name": "01_天空或远景地面_Sky_Distant_Ground",
+    "bg_layer_name": "01_天空或远景地面底板_Sky_Distant_Ground_Base_Ground",
     "background_mode": "sky_or_distant_ground",
     "super_res_scale": 4.0,
     "deocclusion_radius": 11,

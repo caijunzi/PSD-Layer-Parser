@@ -30,6 +30,99 @@ def default_episode_path() -> str:
     return os.environ.get("ADAPTIVE_EPISODE_PATH", DEFAULT_EPISODE_PATH)
 
 
+# =============================================================================
+# 严格准入相关常量（与 tools/audit_psb.audit() 产出的 dims 键严格一致）
+# =============================================================================
+# 8 维审计维度键（顺序即维度序）
+DIM_KEYS = ("① 层属性", "② 分辨率真实性", "③ 实例重复", "④ 内容承载",
+            "⑤ 合成等价性", "⑥ 底板纯净度", "⑦ plate 合规", "⑧ manifest 一致")
+# 仅 PLATE 产品线必需的维度；DESIGN 线该维度不适用（na）
+PLATE_DIM = "⑦ plate 合规"
+# 产品线取值
+PRODUCT_LINES = ("plate", "design", "both")
+
+
+def _resolve_index_path() -> Path:
+    """解析 CBR 索引文件路径（与 episode_indexer.get_default_indexer 同口径，但不加载已有索引）。"""
+    override = os.environ.get("ADAPTIVE_INDEX_PATH")
+    if override:
+        return Path(override)
+    engine_root = Path(__file__).resolve().parent.parent.parent
+    return engine_root / "webui" / "data" / "episode_index.pkl"
+
+
+def _summary_from_full(report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """从完整 8 维审计报告派生 4 字段摘要（向后兼容，旧代码读 audit_8d.lost_ratio 等）。
+
+    原始完整报告始终保留在 audit_full，摘要仅作便捷视图，绝不替代原始。
+    """
+    dims = (report or {}).get("dims", {})
+
+    def _m(dim: str, key: str, default=None):
+        return dims.get(dim, {}).get("metrics", {}).get(key, default)
+
+    return {
+        "lost_ratio": _m("④ 内容承载", "lost_ratio"),
+        "rmse_lowfreq": _m("⑤ 合成等价性", "rmse_lowfreq"),
+        "rmse_raw": _m("⑤ 合成等价性", "rmse_raw"),
+        "plate_purity_ok": _m("⑦ plate 合规", "plate_purity_ok"),
+        "tac_max_pct": _m("⑦ plate 合规", "tac_max_pct"),
+        "n_layers": _m("① 层属性", "layer_count"),
+        "passed": (report or {}).get("passed"),
+    }
+
+
+def _store_audit(rec: Dict[str, Any], report: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """把审计报告写入 episode 记录：保留原始完整报告(audit_full) + 兼容摘要(audit_8d)。
+
+    - report 含 'dims' 视为完整 8 维报告 → 同时存 audit_full 与派生 audit_8d
+    - 否则视为旧式 4 字段摘要 → 仅存 audit_8d，audit_full 保持 None（严格准入会据此 skip）
+    """
+    if isinstance(report, dict) and "dims" in report:
+        rec["audit_full"] = report
+        rec["audit_8d"] = _summary_from_full(report)
+    elif isinstance(report, dict):
+        rec["audit_8d"] = {
+            k: report.get(k)
+            for k in ("lost_ratio", "rmse_lowfreq", "rmse_raw", "plate_purity_ok", "tac_max_pct", "n_layers", "passed")
+        }
+        rec.setdefault("audit_full", None)
+    return rec
+
+
+def _admit(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """严格 8 维准入判定。
+
+    规则（2026-09-15 修正）：
+    - 必须持有**原始完整 8 维报告**（audit_full）；缺字段/缺报告 → 不准入（skip）。
+    - 每个必需维度必须：存在、真正核验过(evaluated)、且 passed=True。
+      否则（失败 / 未核验 / 缺字段）→ 不准入。
+    - 产品线适用性：DESIGN 线豁免 ⑦ plate 合规（该维度 na）；PLATE 线 ⑦ 为必需。
+    - **绝不降低任何重建质量阈值**来凑通过——阈值由 audit_psb 计算，这里只消费 passed。
+
+    Returns: {"admitted": bool, "reason": str}
+    """
+    report = rec.get("audit_full")
+    if not isinstance(report, dict) or "dims" not in report:
+        return {"admitted": False, "reason": "no_full_report"}
+    output_mode = str(rec.get("output_mode") or "").lower()
+    required = list(DIM_KEYS)
+    if output_mode == "design":
+        required = [d for d in required if d != PLATE_DIM]  # design 线 ⑦ 不适用
+    dims = report.get("dims", {})
+    for dim in required:
+        d = dims.get(dim)
+        if not isinstance(d, dict):
+            return {"admitted": False, "reason": f"missing_dim:{dim}"}
+        if d.get("na"):
+            return {"admitted": False, "reason": f"not_evaluated:{dim}"}
+        if not d.get("evaluated", False):
+            return {"admitted": False, "reason": f"not_evaluated:{dim}"}
+        if not d.get("passed"):
+            return {"admitted": False, "reason": f"failed:{dim}"}
+    return {"admitted": True, "reason": "ok"}
+
+
 def _episode_id(material_family: str, image_path: Optional[str], ts: str) -> str:
     """生成稳定且可读的 episode id。"""
     base = f"{material_family}|{image_path or 'none'}|{ts}"
@@ -48,6 +141,8 @@ def archive_episode(
     episode_path: Optional[str] = None,
     update_index: bool = True,
     audit_8d: Optional[Dict[str, Any]] = None,
+    audit_report: Optional[Dict[str, Any]] = None,
+    output_mode: Optional[str] = None,
     auto_tune: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
@@ -83,9 +178,16 @@ def archive_episode(
         if _emb is not None and len(_emb) == 128:
             embedding = [round(float(x), 6) for x in _emb]
 
-    # 审计摘要：只保留可用于回归判定与 CBR 门槛的关键字段
+    # 审计数据：优先完整报告(audit_report)，回退旧式 4 字段摘要(audit_8d)。
+    # 原始完整报告保留在 audit_full，摘要 audit_8d 仅作便捷视图（详见 _store_audit）。
     audit_summary = None
-    if audit_8d:
+    _full_report = audit_report if isinstance(audit_report, dict) else (
+        audit_8d if isinstance(audit_8d, dict) and "dims" in audit_8d else None)
+    if _full_report is not None:
+        _tmp = {"audit_full": None, "audit_8d": None}
+        _store_audit(_tmp, _full_report)
+        audit_summary = _tmp.get("audit_8d")
+    elif isinstance(audit_8d, dict):
         audit_summary = {
             "lost_ratio": audit_8d.get("lost_ratio"),
             "rmse_lowfreq": audit_8d.get("rmse_lowfreq"),
@@ -104,7 +206,9 @@ def archive_episode(
         "image_path": image_path,
         "fingerprint_summary": fp_summary,
         "embedding": embedding,
+        "audit_full": _tmp.get("audit_full") if _full_report is not None else None,
         "audit_8d": audit_summary,
+        "output_mode": output_mode,
         "auto_tune": auto_tune or {},
         "notes": notes,
     }
@@ -115,33 +219,11 @@ def archive_episode(
     with _lock:
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    
-    # Stage 4：归档后触发索引更新（CBR 案例推理库）
-    if update_index and fingerprint and "embedding" in fingerprint:
-        try:
-            from .episode_indexer import get_default_indexer
-            import numpy as np
-            
-            # 提取指纹向量（PCA128）
-            embedding = fingerprint.get("embedding")
-            if embedding is not None and len(embedding) == 128:
-                # 判断是否通过审计（lost_ratio < 0.05 为通过）
-                audit_passed = False
-                if audit_8d:
-                    lost_ratio = audit_8d.get("lost_ratio", 1.0)
-                    audit_passed = (lost_ratio < 0.05)
-                
-                # 更新索引
-                indexer = get_default_indexer()
-                indexer.add(
-                    task_id=record["episode_id"],
-                    fingerprint=np.array(embedding, dtype=np.float32),
-                    audit_passed=audit_passed
-                )
-                indexer.save()
-        except Exception as e:
-            # 索引更新失败不影响归档主流程
-            print(f"⚠️ 索引更新失败（{e}），归档已完成")
+
+    # 注意：索引更新**不**在此处做。归档发生在分割/超分之前，此时审计尚不存在，
+    # 即便有 embedding 也无法判定 audit_passed（强填 False 只会留下陈旧的未通过条目）。
+    # 正确收口由「审计完成后」的 finalize_episode（单条）或 sync_index_from_log
+    # （全量权威重建）完成——它们基于完整 8 维报告做严格准入。
 
     return record["episode_id"]
 
@@ -220,19 +302,25 @@ def load_episode_by_id(
 
 def update_episode_audit(
     episode_id: str,
-    audit_8d: Dict[str, Any],
+    audit_report: Optional[Dict[str, Any]] = None,
     episode_path: Optional[str] = None,
+    output_mode: Optional[str] = None,
 ) -> bool:
-    """回填某 episode 的审计 8 维结果（审计在出图之后才产生，故需事后回填）。
+    """回填某 episode 的审计结果（审计在出图之后才产生，故需事后回填）。
 
     修复（2026-09-15）：引擎归档发生在分割/超分之前，此时审计尚不存在，
     导致 archive 时 audit_passed 恒为 False、CBR 索引筛空。本函数让审计完成后
-    由 WebUI 侧回填，并配合 sync_index_from_log 重建索引。
+    由 WebUI 侧回填，**保留原始完整 8 维报告(audit_full)**，并供 sync_index_from_log 重建索引。
+
+    参数兼容旧式 4 字段摘要（audit_8d 形式）：若传入 dict 不含 'dims' 视为旧摘要，
+    仅写 audit_8d，audit_full 保持 None（严格准入据此 skip）。
 
     Args:
-        episode_id: episode id
-        audit_8d: 审计 8 维数据（lost_ratio / rmse_lowfreq / plate_purity_ok / n_layers）
+        episode_id:   episode id
+        audit_report: 完整 8 维审计报告（tools/audit_psb.audit() 返回值）；
+                      也兼容旧式 4 字段摘要 dict
         episode_path: JSONL 日志路径
+        output_mode: 产品线（plate/design/both），用于严格准入所需维度判定
 
     Returns:
         是否找到并更新
@@ -254,12 +342,9 @@ def update_episode_audit(
                 except json.JSONDecodeError:
                     continue
                 if rec.get("episode_id") == episode_id:
-                    rec["audit_8d"] = {
-                        "lost_ratio": audit_8d.get("lost_ratio"),
-                        "rmse_lowfreq": audit_8d.get("rmse_lowfreq"),
-                        "plate_purity_ok": audit_8d.get("plate_purity_ok"),
-                        "n_layers": audit_8d.get("n_layers"),
-                    }
+                    _store_audit(rec, audit_report)
+                    if output_mode is not None:
+                        rec["output_mode"] = output_mode
                     found = True
                 records.append(rec)
 
@@ -268,6 +353,89 @@ def update_episode_audit(
                 for rec in records:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return found
+
+
+def finalize_episode(
+    epid: str,
+    audit_report: Optional[Dict[str, Any]] = None,
+    detections: Optional[Dict[str, Any]] = None,
+    output_mode: Optional[str] = None,
+    artifact: Optional[str] = None,
+    episode_path: Optional[str] = None,
+    update_index: bool = True,
+) -> Dict[str, Any]:
+    """收口 API：审计完成后把**原始完整 8 维报告**写入 episode，并按严格准入刷新 CBR 索引。
+
+    设计给**主代理 / WebUI** 接线：一次产品线出图 → 跑审计 → 调用本函数完成 episode 终态。
+    与 `archive_episode`（出图前归档）配对：archive 写语义/指纹，finalize 写审计终态。
+
+    Args:
+        epid:          archive_episode 返回的 episode id
+        audit_report / detections: 完整 8 维审计报告（tools/audit_psb.audit() 返回值，
+                                    含 dims + passed）。detections 为同义别名。
+        output_mode:   "plate" | "design" | "both" —— 决定严格准入所需维度
+                       （design 线豁免 ⑦ plate 合规；plate 线 ⑦ 必需）
+        artifact:      被审计产物路径（如 result.plate.psb），仅作记录，便于回放/排查
+        episode_path:  JSONL 日志路径
+        update_index:  是否刷新 CBR 索引（默认 True）
+
+    Returns:
+        {"episode_id": str, "admitted": bool, "audit_passed": bool, "reason": str}
+        - admitted=True  → 已写入索引（audit_passed=True）
+        - admitted=False → 未准入（失败/缺字段/必需维度未核验），不入索引，reason 指明原因
+    """
+    report = audit_report if isinstance(audit_report, dict) else detections
+    path = Path(episode_path or default_episode_path())
+    if not path.exists():
+        return {"episode_id": epid, "admitted": False, "audit_passed": False,
+                "reason": "no_episode_log"}
+
+    found = False
+    matched_rec = None
+    records: List[Dict[str, Any]] = []
+    with _lock:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    records.append(line)
+                    continue
+                if rec.get("episode_id") == epid:
+                    # 保留原始完整报告（audit_full）+ 兼容摘要（audit_8d）
+                    _store_audit(rec, report)
+                    if output_mode is not None:
+                        rec["output_mode"] = output_mode
+                    if artifact is not None:
+                        rec["audited_artifact"] = artifact
+                    found = True
+                    matched_rec = rec
+                records.append(rec)
+        if found:
+            with path.open("w", encoding="utf-8") as f:
+                for rec in records:
+                    if isinstance(rec, str):
+                        f.write(rec + "\n")
+                    else:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    if not found:
+        return {"episode_id": epid, "admitted": False, "audit_passed": False,
+                "reason": "episode_not_found"}
+
+    # 注意：必须用 matched_rec（命中的那条），不能用循环后的 rec（那是最后一条）
+    decision = _admit({"audit_full": matched_rec.get("audit_full"),
+                       "output_mode": matched_rec.get("output_mode")})
+    admitted = decision["admitted"]
+    if update_index:
+        sync_index_from_log(str(path))
+
+    decision["episode_id"] = epid
+    decision["audit_passed"] = admitted
+    return decision
 
 
 def sync_index_from_log(
@@ -279,16 +447,19 @@ def sync_index_from_log(
     update_episode_audit 回填 → 本函数重建索引，使 audit_passed 反映真实审计结果。
 
     Returns:
-        本次写入索引的 episode 数量
+        本次写入索引（严格准入通过）的 episode 数量
     """
     import numpy as np
-    from .episode_indexer import get_default_indexer
+    from .episode_indexer import EpisodeIndexer
 
     path = Path(episode_path or default_episode_path())
     if not path.exists():
         return 0
 
-    indexer = get_default_indexer()
+    # 权威重建：全新空索引，只收「严格 8 维准入通过」的 episode。
+    # 不再像旧逻辑那样用 4 维宽松指标(lost_ratio<0.05)且缺值默认良好——
+    # 失败/缺字段/必需维度未核验一律不准入（skip）。
+    indexer = EpisodeIndexer(_resolve_index_path())
     n = 0
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -302,12 +473,9 @@ def sync_index_from_log(
             emb = rec.get("embedding")
             if not emb or len(emb) != 128:
                 continue
-            audit = rec.get("audit_8d") or {}
-            lost = audit.get("lost_ratio")
-            audit_passed = bool(lost is not None and float(lost) < 0.05)
-            indexer.add(rec.get("episode_id"), np.array(emb, dtype=np.float32), audit_passed)
-            n += 1
+            if _admit(rec)["admitted"]:
+                indexer.add(rec.get("episode_id"), np.array(emb, dtype=np.float32), True)
+                n += 1
 
-    if n:
-        indexer.save()
+    indexer.save()
     return n

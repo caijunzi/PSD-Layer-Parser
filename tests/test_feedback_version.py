@@ -67,6 +67,15 @@ class TestFeedbackVersionChain(unittest.TestCase):
         self.assertAlmostEqual(weight, 1.1, places=5)   # accept ×1.1
         self.assertEqual(n_accept, 1)
 
+        # 版本必须如实登记为 pending，不得谎称 regression passed（可被 list_versions 查到）
+        from engine.adaptive.db_manager import create_db_manager
+        mgr = create_db_manager(str(self.db))
+        versions = mgr.list_versions(limit=10)
+        self.assertTrue(any(v["version_id"] == res["version_id"] for v in versions))
+        target = next(v for v in versions if v["version_id"] == res["version_id"])
+        self.assertEqual(target["regression_status"], "pending")
+        mgr.close()
+
     def test_rename_creates_version_and_updates_name(self):
         res = apply_feedback_to_category(
             "water_ripples", "rename", {"new_name": "涟漪"}, db_path=str(self.db)

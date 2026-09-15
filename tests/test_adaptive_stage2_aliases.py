@@ -144,6 +144,27 @@ def test_merge_auto_mode_uses_aliases(db_env):
     assert merged[1]["name"] == "山石崖壁_Mountains_Cliffs"
 
 
+def test_merge_hybrid_mode_normalizes_layer_name_and_resolves_id(db_env):
+    """preset 只有 layer_name 时，仍应补 name 与规范 category_id。"""
+    _, open_db = db_env
+    db = open_db()
+
+    preset_classes = [
+        {
+            "label_cn": "印章",
+            "layer_name": "印章_Cinnabar_Seal",
+            "prompt": "red seal",
+            "region": [0.8, 0.8, 0.95, 0.95],
+        },
+    ]
+    merged = merge_into_preset_format(preset_classes, [], mode="hybrid", db=db)
+
+    assert merged[0]["name"] == "印章_Cinnabar_Seal"
+    assert merged[0]["layer_name"] == "印章_Cinnabar_Seal"
+    assert merged[0]["category_id"] == "seal"
+    assert "region" in merged[0]
+
+
 def test_merge_hybrid_mode_preserves_preset_metadata(db_env):
     """验证 hybrid 模式保留 preset 元数据"""
     _, open_db = db_env

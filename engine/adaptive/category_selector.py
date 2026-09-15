@@ -3,6 +3,7 @@
 
 根据材质家族、指纹特征、preset 模式，从词库选出适配的语义类目清单
 """
+import re
 import numpy as np
 from typing import List, Dict, Optional, Any
 from .db_manager import DBManager
@@ -104,6 +105,121 @@ def _ensure_core_categories(category_ids: List[str]) -> List[str]:
             result.insert(0, cid)  # 插入开头（优先检测）
     
     return result
+
+
+def resolve_canonical_category_id(
+    db: Optional[DBManager],
+    name: str,
+) -> Optional[str]:
+    """把 preset 类目名解析为 DB 规范 category_id（仅当存在真实映射，绝不猜不存在的 ID）。
+
+    解析优先级（2026-09-15 修复「DB 规范 ID 与层名混淆 → 学习零建议」）：
+      1) ``category_preset_aliases.preset_name`` 精确匹配（完整名 / 去数字前缀后的基名）；
+      2) ``categories.name_zh / name_en / name_template`` 精确匹配（完整名 / 基名）；
+      3) 整词匹配：把基名按 ``_`` 拆词，命中某 category 的 name_zh / name_en 整词
+         （词频打分取最高，≥1 才采纳）。
+
+    该解析只返回**真实存在的** category_id；任何情况下都不会臆造 ID。
+
+    Args:
+        db:   DBManager 实例（为 None 时直接返回 None）
+        name: preset 类目名（如 "08_芦雁群禽_Geese_Flock"）
+
+    Returns:
+        规范 category_id 字符串，或 None（无映射）
+    """
+    if not name or db is None:
+        return None
+    base = re.sub(r"^\d+[A-Da-d]?_", "", str(name))
+
+    # 1) 别名表精确匹配（完整名 / 基名）
+    for key in (name, base):
+        try:
+            row = db.execute(
+                "SELECT category_id FROM category_preset_aliases WHERE preset_name = ?",
+                (key,),
+            ).fetchone()
+        except Exception:
+            row = None
+        if row:
+            return row[0]
+
+    # 2) categories 的 name_zh / name_en / name_template 精确匹配
+    for key in (name, base):
+        try:
+            row = db.execute(
+                "SELECT id FROM categories WHERE name_zh = ? OR name_en = ? OR name_template = ?",
+                (key, key, key),
+            ).fetchone()
+        except Exception:
+            row = None
+        if row:
+            return row[0]
+
+    # 3) 整词匹配（name_zh / name_en 拆词后与基名词集交集打分）
+    tokens = {t for t in re.split(r"[_\s]+", base) if t}
+    if not tokens:
+        return None
+    try:
+        cur = db.execute("SELECT id, name_zh, name_en FROM categories")
+        rows = cur.fetchall()
+    except Exception:
+        return None
+    best_cid = None
+    best_score = 0
+    for cid, nz, ne in rows:
+        score = 0
+        if nz and nz in tokens:
+            score += 1
+        if ne:
+            ne_tokens = {t for t in re.split(r"[_\s]+", ne) if t}
+            score += len(ne_tokens & tokens)
+        if score > best_score:
+            best_score = score
+            best_cid = cid
+    return best_cid if best_score >= 1 else None
+
+
+def _attach_canonical_id(cls: Dict[str, Any], db: Optional[DBManager]) -> Dict[str, Any]:
+    """给单个 preset 类目字典补规范 category_id，并采用已学习的 DB prompt 选择。
+
+    - 若 cls 已有 category_id 则保留；否则经 ``resolve_canonical_category_id`` 解析。
+    - 若解析到规范 ID 且 DB 中存在真实提示词（排除 shadow），采用**权重最高**的
+      DB 提示词作为该类目的 prompt（「采用已学习的 DB prompt 选择」）。
+    - 保留 preset 原有的 region / gate / instance_split 等元数据（仅补充 ID 与 prompt，
+      不覆盖检测元数据）。
+
+    不臆造 ID：解析失败则 category_id 保持缺省（不写入假 ID）。
+    """
+    cid = cls.get("category_id")
+    if not cid and db is not None:
+        cid = resolve_canonical_category_id(
+            db,
+            cls.get("name") or cls.get("layer_name") or cls.get("label_cn", ""),
+        )
+        if cid:
+            cls["category_id"] = cid
+
+    # 采用已学习的 DB prompt 选择（仅当 DB 确有真实提示词）
+    if cid and db is not None:
+        try:
+            prompts = db.get_category_prompts(cid, min_weight=0.0)
+            real = [p for p in prompts if p.get("source") != "shadow"]
+        except Exception:
+            real = []
+        if real:
+            learned = db.execute(
+                "SELECT prompt, weight FROM category_prompts WHERE category_id = ? "
+                "AND lang = 'en' AND (n_accept > 0 OR n_reject > 0) ORDER BY weight DESC, prompt",
+                (cid,),
+            ).fetchall()
+            if learned:
+                cls["prompt"] = learned[0]["prompt"]
+            cls["db_prompts"] = [
+                {"text": p["prompt"], "weight": p["weight"], "lang": p["lang"]}
+                for p in real
+            ]
+    return cls
 
 
 def _build_category_info(db: DBManager, category_id: str) -> Optional[Dict[str, Any]]:
@@ -229,6 +345,7 @@ def db_category_to_preset_class(cat: Dict[str, Any], db: Optional[DBManager] = N
 
     out: Dict[str, Any] = {
         "name": name,
+        "layer_name": name,
         "prompt": prompt,
         "source": "adaptive_db",
     }
@@ -296,7 +413,21 @@ def merge_into_preset_format(
         corpus_lower = _json.dumps(preset_full, ensure_ascii=False).lower()
         preset_tokens |= _english_tokens(corpus_lower)
 
-    result = list(preset_classes)
+    # 先给 preset 原有类目补规范 category_id（并采用已学习的 DB prompt 选择），
+    # 保留 region / gate / instance_split 等元数据。
+    result = []
+    for pc in preset_classes:
+        # preset 的 SSOT 历史上同时存在 name/layer_name/label_cn 三种命名键；
+        # 下游统一使用 name，保留原 layer_name 作为检测追溯字段。
+        enriched = _attach_canonical_id(pc, db)
+        if not enriched.get("name"):
+            enriched["name"] = (
+                enriched.get("layer_name")
+                or enriched.get("label_cn")
+                or enriched.get("category_id")
+                or ""
+            )
+        result.append(enriched)
     supplemented = 0
     for c in selected_db:
         # 先把 DB 类目解析成 preset 命名（含别名表），再做去重——

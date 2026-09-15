@@ -375,6 +375,7 @@ async def submit_category_feedback_endpoint(
     from engine.adaptive.active_learner import (
         mark_feedback_reviewed,
         apply_feedback_to_category,
+        get_feedback_request,
     )
     
     # 解析 user_data（JSON 字符串 → dict）
@@ -394,19 +395,16 @@ async def submit_category_feedback_endpoint(
         )
     
     try:
-        # 1. 标记反馈请求已审核
-        marked = mark_feedback_reviewed(
-            feedback_request_id=feedback_request_id,
-            user_action=user_action,
-            user_data=user_data_dict,
-        )
-        if not marked:
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到反馈请求：{feedback_request_id}"
-            )
-        
-        # 2. 应用反馈到类目（accept 更新权重 / rename / delete / merge）
+        # 0. 幂等：同一反馈请求已审核（已应用）则跳过重复应用，避免污染
+        existing = get_feedback_request(feedback_request_id)
+        if existing and existing.get("status") == "reviewed":
+            return {
+                "status": "ok",
+                "message": f"反馈已应用（重复请求，已忽略）：{user_action} on {category_id}",
+                "detail": "duplicate_skipped",
+            }
+
+        # 1. 先成功应用反馈到类目（accept 更新权重 / rename / delete / merge）
         #    库路径支持环境变量覆盖（与 /adaptive/stats 一致，便于测试隔离）
         db_path = os.getenv("ADAPTIVE_DB_PATH", str(DEFAULT_DB_PATH))
         outcome = apply_feedback_to_category(
@@ -416,11 +414,23 @@ async def submit_category_feedback_endpoint(
             db_path=db_path,
         )
 
-        # 操作本身失败（如缺 user_data、目标类目不存在）→ 明确报 400
+        # 操作本身失败（如缺 user_data、目标类目不存在、rowcount 零）→ 明确报 400
         if not outcome.get("ok"):
             raise HTTPException(
                 status_code=400,
                 detail=f"反馈操作失败：{outcome.get('detail', '未知原因')}",
+            )
+
+        # 2. 应用成功后再标记反馈请求已审核（先应用后标 reviewed，防止伪完成）
+        marked = mark_feedback_reviewed(
+            feedback_request_id=feedback_request_id,
+            user_action=user_action,
+            user_data=user_data_dict,
+        )
+        if not marked:
+            raise HTTPException(
+                status_code=500,
+                detail=f"反馈已应用但标记审核失败：{feedback_request_id}",
             )
 
         return {

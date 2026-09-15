@@ -28,8 +28,8 @@
 > ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
 > ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
 >    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
-> 测试：引擎 **159 passed / 2 skipped**，WebUI **28 OK**（2026-09-15）。
-> ⚠️ 本批次 ③ 改变了 PSB 输出与耗时，按铁律须重跑金标准回归与 RK-16 逐像素复核后方可交付。
+> 当前回归基线：引擎 **208 passed / 2 skipped**，WebUI **34 passed**（2026-09-15）。真实绢本工笔两张样本分类均通过，但分层审计仍暴露内容承载/合成质量问题。
+> 本轮新增自适应字段桥接、审计回填、CBR 冷启动闭环和真实样本回归；九样本首轮证据见 `outputs/adaptive-e2e-20260915-final/results.json`，油画 preset 修复后的独立复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`。
 
 ---
 
@@ -84,9 +84,9 @@
 **三条关键架构决策**（ADR-021/022/023，详见 `docs/MEMORY.md`）：
 1. episode 存储走**文件系统 JSONL**，不建 `episodes` 数据库表
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
-3. `inherit_priors()` **跳过实现标 TODO**（`category_priors` 表为空，等真实统计）
+3. `inherit_priors()` 在 `category_priors` 为空时**优雅跳过**；有真实先验时才复制，不手写未经验证的 seed
 
-> ⚠️ 引擎全量测试基线 **152 passed / 2 skipped**（含 Stage 5 e2e 14 + 接线守卫 10）。
+> 引擎全量测试基线已更新为 **209 passed / 2 skipped**；WebUI **34 passed**。
 
 ---
 

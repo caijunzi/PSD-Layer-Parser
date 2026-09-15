@@ -192,7 +192,7 @@ def test_stage1_auto_mode_different_images():
     presets = [load_preset("chinese_ink_landscape_ai") for _ in images]
     for p in presets:
         p.mode = "auto"
-    
+
     results = []
     for img, preset in zip(images, presets):
         # 模拟主流程
@@ -200,7 +200,7 @@ def test_stage1_auto_mode_different_images():
         material_family, _ = classify_material_family(fingerprint)
         selected = select_categories(fingerprint, material_family, db_path, preset.mode, None)
         results.append(set(c["category_id"] for c in selected))
-    
+
     # 断言：3 张图的类目集合不完全相同
     assert len(set(frozenset(r) for r in results)) >= 2
 
@@ -208,7 +208,7 @@ def test_stage1_locked_mode_unchanged():
     """locked mode 时输出与原 preset 一致"""
     preset = load_preset("chinese_ink_landscape_ai")
     assert preset.mode == "locked"
-    
+
     # 即使传了 material_family，也应返回原 ai_semantic_classes
     selected = select_categories({}, "宣纸水墨", db_path, "locked", preset.ai_semantic_classes)
     assert len(selected) == len(preset.ai_semantic_classes)
@@ -296,13 +296,13 @@ async def suggest_auto_tune(file: UploadFile, preset_id: str):
     """
     image = cv2.imdecode(np.frombuffer(await file.read(), np.uint8), cv2.IMREAD_COLOR)
     preset = load_preset(preset_id)
-    
+
     fingerprint = extract_fingerprint(image, preset.background_mode)
     density_map = fingerprint["density_map"]
-    
+
     bands = suggest_density_bands(density_map, preset.ai_semantic_classes)
     regions = suggest_regions(fingerprint, {})  # dino_heatmap 暂空
-    
+
     return {
         "density_bands": bands,
         "regions": regions,
@@ -441,7 +441,7 @@ tests/test_golden_layers.py              # 改为"核心类目必出 + 审计不
 1. `background_learner.py`：
    ```python
    from starlette.background import BackgroundTasks
-   
+
    def trigger_learning(episode_path: str):
        learner = SemanticLearner(db_path)
        learner.process_episode_batch([episode_path])
@@ -473,7 +473,7 @@ tests/test_golden_layers.py              # 改为"核心类目必出 + 审计不
        layers = {l["layer_name"] for l in result["layers"]}
        assert "印章" in layers
        assert "题跋" in layers
-       
+
        audit = result["audit"]
        baseline = load_baseline("task_golden_chinese_ink")
        for key in baseline:
@@ -636,17 +636,19 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 **任务**：
 1. ✅ `CategoryTree.insert(category_id, parent_id)` + 无环检测（DFS 遍历后代）
 2. ✅ `CategoryTree.get_ancestors(category_id) -> [parent_id, grandparent_id, ...]`
-3. ⏸️ `CategoryTree.inherit_priors(new_category_id, parent_id)`：**已跳过实现，标记 TODO**
-   - 原因：`category_priors` 表当前为空（0 条），无可继承数据
-   - 决策：等 Stage 3 反馈学习填充 priors 后再补（手写 seed 数据是"拍脑袋"，不如真实统计）
+3. ✅ `CategoryTree.inherit_priors(new_category_id, parent_id)`：空表时优雅跳过，有真实先验时复制
+   - 当前 `category_priors` 仍为空，因此本轮不产生复制结果
+   - 决策：继续等待 Stage 3 反馈学习积累真实 priors，不写未经验证的 seed
 4. ✅ 迁移脚本：`migrations/migration_003_build_tree.py`
    - ⚠️ **修正**：原计划写 `migration_002_build_tree.py`，但 `002` 已被 preset 别名占用
      （`migration_002_apply.py` / `migration_002_preset_aliases.sql`），故改用 **003**
    - 实际结构：根「山水画」→ 7 个二级类目（山/水/植被/建筑/天象与云雾/人物与动物/底板与边框）→ 20 个三级类目
 
 **验收标准**：
-- ✅ `pytest tests/test_adaptive_tree.py`（7 例全绿：插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors NotImplementedError）
+- ✅ `pytest tests/test_adaptive_tree.py`（7 例全绿：插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors 空表优雅跳过）
 - ✅ 迁移后 `SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL` = **13**（≥10 达标）
+
+> **2026-09-15 状态覆核**：类目 `rename / delete / merge` 已完成真实实现；`delete` 为软删除，`merge` 处理同名 prompt 冲突。测试基线以引擎 `209 passed / 2 skipped`、WebUI `34 passed` 为准。真实绢本工笔分类回归通过；油画修复后 cold/repeat 审计通过，绢本分层质量问题仍待后续算法修复。
   - 总数 27（原 20 + 新增 8：1 根 + 7 二级）
   - path 正确计算，如 `/landscape_painting/distant_mountains/`
 
@@ -698,8 +700,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 **任务**：
 1. ✅ 展示不确定类目（类目 id + prompt + bbox + **confidence 进度条**）
 2. ✅ 按钮：accept / rename(输入框) / delete / merge(输入目标类目 id)
-   - ⚠️ **merge 用文本输入目标 id**（非下拉选择）：后端 merge 目前是 TODO，
-     不为一个未实现功能扩展 API（`GET /api/adaptive/categories` 只返回 `display_name` 无 id）
+   - ✅ **merge 使用目标类目 id**：后端已实现软删除/合并及同名 prompt 冲突处理，前端继续沿用文本输入目标 id，后续可再改为下拉选择
 3. ✅ 提交到 `POST /api/adaptive/categories/{id}/feedback`
 4. ✅ 集成轮询：`App.tsx` 每 3 秒调用 `GET /api/adaptive/pending-feedbacks?limit=1`
    - 弹窗打开时**暂停轮询**（避免打断用户操作），组件卸载清理 interval

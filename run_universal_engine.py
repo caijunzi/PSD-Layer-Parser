@@ -203,12 +203,45 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     return summary, extra_layers
 
 
-def _post_run_audit_and_sync(output_path: str, source_path: str) -> None:
-    """出图后自动跑 8 维审计 + 回填 episode + 重建 CBR 索引（B5：CLI 冷启动闭环）。
+def _audit_strict() -> bool:
+    """严格审计环境：ULS_AUDIT_STRICT=1/true/yes 时，审计失败需传播为非零退出。"""
+    return str(os.environ.get("ULS_AUDIT_STRICT", "")).lower() in ("1", "true", "yes")
+
+
+def _describe_admit_reason(reason: str) -> str:
+    """把 finalize_episode 的拒绝原因码翻译成可读中文说明。"""
+    if reason == "no_full_report":
+        return "审计报告缺少完整 8 维 'dims'（旧式/不完整报告，已拒绝收口）"
+    if reason == "no_episode_log":
+        return "episode 日志不存在"
+    if reason == "episode_not_found":
+        return "未找到对应 episode 记录"
+    if reason and reason.startswith("missing_dim:"):
+        return f"缺必需审计维度：{reason.split(':',1)[1]}"
+    if reason and reason.startswith("not_evaluated:"):
+        return f"必需维度未真正核验：{reason.split(':',1)[1]}"
+    if reason and reason.startswith("failed:"):
+        return f"必需维度未通过：{reason.split(':',1)[1]}"
+    return reason or "unknown"
+
+
+def _post_run_audit_and_sync(output_path: str, source_path: str, output_mode: str = "design") -> int:
+    """出图后自动跑 8 维审计 + finalize_episode 收口 + 重建 CBR 索引（B5：CLI 冷启动闭环）。
 
     由环境变量 `ULS_AUDIT_AFTER_RUN=1` 触发。此前只有 WebUI 任务流会审计并回填，
     CLI 直跑时 episode 的 audit_passed 恒为 False → CBR 永远检索不中。
-    全程 try 包裹：审计/回填属旁路能力，失败不得影响产物。
+
+    **完整审计报告收口（2026-09-15 修复「旧报告被误当通过」）**：
+    - 必须用**完整** 8 维审计报告（含 ``dims`` + ``passed``）调用 ``finalize_episode``；
+      旧式 4 字段摘要（无 ``dims``）被视为不完整、**拒绝收口**并打印详细原因。
+    - ``finalize_episode`` 的 ``detections`` 参数实为其审计报告的同义别名，本函数只传审计报告，
+      不把检测记录误塞进审计语义。
+    - 详细失败原因始终打印（准入/未准入/不完整报告）。
+    - 严格测试环境 ``ULS_AUDIT_STRICT=1``：审计失败 / 报告不完整 / 未准入 → 返回非零，
+      由 main 传播为进程退出码；正常（非严格）保留可配置行为（仅日志、不阻断产物）。
+
+    Returns:
+        0 = 收口成功（或无可收口）；非 0 = 审计失败（供严格环境传播非零退出）
     """
     stem, _ = os.path.splitext(output_path)
     manifest = f"{stem}.manifest.json"
@@ -221,26 +254,91 @@ def _post_run_audit_and_sync(output_path: str, source_path: str) -> None:
             _sys.executable, os.path.join("tools", "audit_psb.py"), output_path,
             "--manifest", manifest, "--source", source_path, "--json", audit_json,
         ]
+        if os.path.isfile(audit_json):
+            os.replace(audit_json, audit_json + ".previous")
         r = subprocess.run(cmd, cwd=os.path.dirname(os.path.abspath(__file__)),
-                           capture_output=True, text=True, encoding="utf-8")
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode not in (0, 2):
+            print(r.stderr[-4000:])
+            return r.returncode
         print(f"[PostRun] 8 维审计门 exit={r.returncode}（0=全过 / 2=有不通过维度）")
 
         if not os.path.isfile(audit_json):
-            print("[PostRun] 未生成 audit.json，跳过 CBR 回填")
-            return
+            print("[PostRun] 未生成 audit.json，审计失败：" + r.stderr[-2000:])
+            return 2
         if not LAST_EPISODE_ID:
             print("[PostRun] 本次无 episode（自适应未启用），跳过 CBR 回填")
-            return
+            return r.returncode
 
-        from engine.adaptive.episode_archiver import update_episode_audit, sync_index_from_log
-        from engine.adaptive.regression_tester import extract_audit_8d
+        # 读取完整 8 维审计报告（原始 JSON，含 dims + passed）
+        import json as _json
+        with open(audit_json, "r", encoding="utf-8") as _f:
+            full_report = _json.load(_f)
 
-        audit_8d = extract_audit_8d(audit_json)
-        if update_episode_audit(LAST_EPISODE_ID, audit_8d):
-            n = sync_index_from_log()
-            print(f"[PostRun] CBR 索引已按真实审计重建：{n} 条（episode={LAST_EPISODE_ID}）")
-    except Exception as e:  # 旁路失败静默
+        # 拒旧报告：缺少完整 8 维 dims → 视为不完整，拒绝收口并详细打印
+        if not isinstance(full_report, dict) or "dims" not in full_report:
+            _reason = "审计报告缺少完整 8 维 'dims' 字段（旧式/不完整报告，已拒绝收口）"
+            print(f"[PostRun] ❌ {_reason}")
+            print(f"[PostRun]    audit.json 顶层键：{list(full_report.keys()) if isinstance(full_report, dict) else type(full_report)}")
+            return 2 if _audit_strict() else 0
+
+        from engine.adaptive.episode_archiver import finalize_episode, sync_index_from_log
+
+        # 完整报告收口：保留原始 8 维（audit_full），并按严格准入刷新 CBR 索引
+        decision = finalize_episode(
+            LAST_EPISODE_ID,
+            audit_report=full_report,
+            output_mode=output_mode,
+            artifact=output_path,
+        )
+        if decision["admitted"]:
+            print(f"[PostRun] ✅ episode 终态：审计准入通过（audit_passed），已写入 CBR 索引。")
+            return 0
+
+        # 未准入：打印详细原因；严格环境传播非零
+        _detailed = _describe_admit_reason(decision.get("reason"))
+        print(f"[PostRun] ⚠️ episode 终态：未准入（reason={decision.get('reason')}）。{_detailed}")
+        print(f"[PostRun]   完整审计报告 passed={full_report.get('passed')}；"
+              f"该 episode 不进入 CBR 索引（避免污染冷启动复用）。")
+        return 2 if _audit_strict() else 0
+    except Exception as e:  # 旁路异常：默认不阻断产物
         print(f"[PostRun] 审计/回填失败（不影响产物）: {e}")
+        return 2 if _audit_strict() else 0
+
+
+
+def _apply_cbr_auto_tune(preset: dict, cbr_auto_tune: dict) -> bool:
+    """把 CBR 命中的已验证调优参数真正应用到当前 preset（Stage 4 收口）。
+
+    仅注入**结构性**参数（regions / density_bands），与 preset 既有的
+    region / density_band_classes 字段同构；仅当候选确有这些参数时才应用并返回 True。
+    不臆造、不覆盖无关字段，避免跨类型配置污染。
+
+    Args:
+        preset: 当前使用的 preset dict（原地修改）
+        cbr_auto_tune: 命中历史 episode 的 auto_tune（含 regions / density_bands 等）
+
+    Returns:
+        是否成功应用了至少一类结构性参数
+    """
+    if not isinstance(cbr_auto_tune, dict) or not isinstance(preset, dict):
+        return False
+    applied = False
+    regions = cbr_auto_tune.get("regions")
+    density_bands = cbr_auto_tune.get("density_bands")
+    if isinstance(regions, dict):
+        for cls in preset.get("ai_semantic_classes", []):
+            saved = regions.get(cls.get("name") or cls.get("layer_name"))
+            if isinstance(saved, dict):
+                for key in ("region", "regions"):
+                    if key in saved:
+                        cls[key] = saved[key]
+                        applied = True
+    if density_bands:  # 密度带（非空）
+        preset["density_band_classes"] = density_bands
+        applied = True
+        print(f"[CBR] 已应用 density_bands（{len(density_bands)} 条）")
+    return applied
 
 
 def _seed_everything(seed: int) -> None:
@@ -278,8 +376,11 @@ def resolve_output_size(w_lr: int, h_lr: int, target_scale, target_w, target_h, 
     return int(w_lr * scale), int(h_lr * scale)
 
 
-def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=None, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42):
+def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", target_scale=None, target_w=None, target_h=None, dpi=None, device=None, profile="robust_performance", output_mode="design", icc_override=None, seed=42, adaptive_mode_override=None):
     global LAST_EPISODE_ID
+    # 每次 run_pipeline 重置 episode 句柄：避免多产品线（both 模式）或多次调用间串味，
+    # 保证「本次 run」对应唯一 episode（2026-09-15 修复：此前 LAST_EPISODE_ID 跨 run 残留）。
+    LAST_EPISODE_ID = None
     t_start = time.time()
     from engine.schemas.profile_config import resolve_profile
     from engine.schemas.manifest import (
@@ -318,18 +419,26 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     preset = load_preset(preset_name)
-    
+
     # -------------------------------------------------------------
     # Adaptive Semantics: Material Classification & Category Selection
-    # 根据环境变量 ADAPTIVE_MODE 决定是否启用自适应语义（Stage 1）
+    # 根据 preset 顶层 mode 或 CLI --adaptive-mode 覆盖决定是否启用自适应语义（Stage 1）
     # -------------------------------------------------------------
     from engine.schemas.presets import get_adaptive_mode
-    adaptive_mode = get_adaptive_mode(preset)  # "locked" | "auto" | "hybrid"
+    # 显式 CLI 覆盖优先；缺省沿 preset（不改生产 preset 默认行为，仅用于跨类实验）
+    if adaptive_mode_override in ("locked", "auto", "hybrid"):
+        adaptive_mode = adaptive_mode_override
+    else:
+        adaptive_mode = get_adaptive_mode(preset)  # "locked" | "auto" | "hybrid"
 
     # 仅当显式启用 auto/hybrid 时才做自适应类目选择；
     # 默认 "locked" 保持 preset.ai_semantic_classes 为唯一真相（SSOT），不触碰。
+    # effective_auto_tune / cbr_hit 在函数作用域内声明，供出图后写回 episode 使用。
+    effective_auto_tune = None
+    cbr_hit = None
     if adaptive_mode in ("auto", "hybrid"):
-        print(f"[Adaptive] 自适应语义已启用: {adaptive_mode.upper()}")
+        print(f"[Adaptive] 自适应语义已启用: {adaptive_mode.upper()}"
+              + (f"（CLI 覆盖）" if adaptive_mode_override in ("locked", "auto", "hybrid") else ""))
         try:
             from engine.adaptive.fingerprint import extract_fingerprint
             from engine.adaptive.material_classifier import classify_material_family
@@ -354,32 +463,36 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 print(f"[Adaptive] 材质判别: {material_family}（置信度 {mat_conf:.2f}）")
 
                 # 2.5. Stage 4：CBR 案例推理检索（复用相似历史图的已验证参数）
-                cbr_hit = None
+                #     **安全白名单**：仅当命中历史 episode 与当前图同 preset / 同产品线 /
+                #     同 auto_tune 参数 schema 时才复用，杜绝跨类型配置污染。
                 try:
                     from engine.adaptive.cbr_retriever import retrieve_similar_episode, get_cbr_hit_info
                     from engine.adaptive.episode_indexer import get_default_indexer
                     from pathlib import Path
-                    
+
                     # 获取 episode 归档目录（默认 webui/data/episodes/）
                     engine_root = Path(__file__).resolve().parent
                     episodes_dir = engine_root / "webui" / "data" / "episodes"
-                    
-                    # 检索最相似的历史 episode
+
+                    # 检索最相似的历史 episode（隔离 env：索引/日志经 ADAPTIVE_INDEX/ EPISODE_PATH）
                     indexer = get_default_indexer()
                     if len(indexer) > 0:  # 有历史索引才检索
                         cbr_hit = retrieve_similar_episode(
                             fingerprint=fp.get("embedding"),
                             indexer=indexer,
                             episodes_dir=episodes_dir,
-                            min_similarity=0.7
+                            min_similarity=0.7,
+                            preset_name=preset_name,
+                            product_line=output_mode,
+                            param_schema={"global_percentiles", "regions", "density_bands"},
                         )
-                        
+
                         if cbr_hit:
                             cbr_info = get_cbr_hit_info(cbr_hit)
                             print(f"[Adaptive] {cbr_info}")
-                            print(f"[Adaptive] 复用历史参数（冷启动加速）")
+                            print(f"[Adaptive] CBR 命中（白名单通过）：将复用已验证调优参数")
                         else:
-                            print(f"[Adaptive] 无相似历史图（相似度阈值 0.7），从零选择类目")
+                            print(f"[Adaptive] 无相似历史图 / 白名单不匹配（相似度阈值 0.7），从零选择类目")
                     else:
                         print(f"[Adaptive] 索引为空（首次运行），从零选择类目")
                 except Exception as cbr_err:
@@ -398,7 +511,8 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 )
 
                 # 4. 合并进 preset 格式（auto 替换 / hybrid 补充）
-                #    Stage 2：传递 db_mgr 让转换函数查询 preset 别名表
+                #    Stage 2：传递 db_mgr 让转换函数查询 preset 别名表；
+                #    为 merged 类补规范 category_id（DB alias / name_zh / name_en 映射）。
                 merged = merge_into_preset_format(
                     preset.get("ai_semantic_classes", []),
                     selected_db,
@@ -406,6 +520,35 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                     db=db_mgr,
                     preset_full=preset,
                 )
+
+                # 4.5. 计算本次图级有效调优参数（供 CBR 归档复用）
+                #     suggest_auto_tune 基于确定性墨密度场，输出 regions / density_bands /
+                #     global_percentiles，与 preset region 同构，可直接落回。
+                try:
+                    from engine.adaptive.auto_tune import suggest_auto_tune
+                    import copy
+                    effective_auto_tune = {
+                        "global_percentiles": {},
+                        "regions": {(c.get("name") or c.get("layer_name")): {k: copy.deepcopy(c[k]) for k in ("region", "regions") if k in c}
+                                    for c in merged if (c.get("name") or c.get("layer_name")) and ("region" in c or "regions" in c)},
+                        "density_bands": copy.deepcopy(preset.get("density_band_classes", [])),
+                    }
+                except Exception as at_err:
+                    print(f"[Adaptive] auto_tune 计算失败（不影响主流程）: {at_err}")
+                    effective_auto_tune = None
+
+                preset["ai_semantic_classes"] = merged
+                # 4.6. 仅复用真实执行过的配置，不把未经验证的密度建议注入生产。
+                if cbr_hit and isinstance(effective_auto_tune, dict):
+                    applied = _apply_cbr_auto_tune(preset, cbr_hit.get("auto_tune") or {})
+                    if applied:
+                        # 以已验证参数覆盖本次生效参数（CBR 复用收口）
+                        effective_auto_tune = cbr_hit.get("auto_tune")
+                        print(f"[Adaptive] CBR 已应用：复用 preset={preset_name} "
+                              f"产品线={output_mode} 的已验证调优参数（冷启动加速）")
+                    else:
+                        print(f"[Adaptive] CBR 命中但无可应用结构参数（仅 global_percentiles），"
+                              f"本次仍用本地 auto_tune")
 
                 # 6. Stage 5.2 主动学习：把不确定类目（confidence < 0.7）写入待审队列
                 #    前端每 3 秒轮询 GET /api/adaptive/pending-feedbacks，读到即弹窗请求人审。
@@ -460,7 +603,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                     preset["ai_semantic_classes"] = merged
                     print(f"[Adaptive] 类目已更新: {len(merged)} 个（{adaptive_mode}）")
                     for cat in merged[:5]:  # 只显示前 5 个
-                        print(f"     * {cat.get('name')}")
+                        print(f"     * {cat.get('name') or cat.get('layer_name') or cat.get('label_cn')}")
                     if len(merged) > 5:
                         print(f"     ... 以及其他 {len(merged) - 5} 个类目")
                     _outcome = "selected"
@@ -476,7 +619,10 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                         image_path=input_path,
                         outcome=_outcome,
                         confidence=float(mat_conf),
-                        notes=f"mode={adaptive_mode}; n_selected={len(_cat_ids)}",
+                        notes=f"mode={adaptive_mode}; n_selected={len(_cat_ids)}"
+                              + ("; cbr_reused=1" if cbr_hit else ""),
+                        output_mode=output_mode,
+                        auto_tune=effective_auto_tune,
                     )
                     print(f"[Adaptive] episode 已归档: {epid}")
                     LAST_EPISODE_ID = epid
@@ -542,6 +688,9 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     print("\n[第 1 步/共 6 步] 智能语义分割与目标解耦 (Grounded SAM / Semantic Object Segmentation)...")
     from engine.providers.grounded_sam_provider import GroundedSAMProvider
     grounded_sam = GroundedSAMProvider(preferred_device=chosen_hw, preset_name=preset_name)
+    grounded_sam._preset_cfg = preset
+    grounded_sam.preset = preset
+    grounded_sam._load_preset_config = lambda: preset
     masks_dict = grounded_sam.segment_objects(src_lr, classes=preset.get("ai_semantic_classes"))
     # 语义覆盖披露（G5）：配置了什么/产出什么/缺什么/为什么 —— 供 manifest.totals 披露
     semantic_coverage = getattr(grounded_sam, "last_coverage", None)
@@ -567,6 +716,25 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
 
         _dino_dets = getattr(grounded_sam, "dino_detections", None) or []
 
+        # 0) 给最终 dino_detections 附规范 category_id（DB alias / name_zh / name_en 映射）。
+        #    经 preset 已 enriched 的 ai_semantic_classes（name → category_id）桥接；
+        #    保留 layer_name 契约（不覆盖、不丢弃）。无映射者保持缺省
+        #    （attribution 会显式判为 unknown，不伪造 ID）。
+        _name_to_cid = {}
+        for c in preset.get("ai_semantic_classes", []):
+            _cid = c.get("category_id")
+            if not _cid:
+                continue
+            for _key in (c.get("name"), c.get("layer_name"), c.get("label_cn")):
+                if _key:
+                    _name_to_cid[_key] = _cid
+        for _det in _dino_dets:
+            _ln = _det.get("layer_name")
+            if _ln and "category_id" not in _det:
+                _cid = _name_to_cid.get(_ln)
+                if _cid:
+                    _det["category_id"] = _cid
+
         # 1) Stage 3：从本次检出生成权重调整建议（只生成、不落库 = 影子模式）
         from engine.adaptive.learner import SemanticLearner
 
@@ -581,7 +749,9 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         )
         _n_attr = len(_learn.get("attributions") or [])
         _n_adj = sum(len(v) for v in (_learn.get("weight_adjustments") or {}).values())
-        print(f"[Adaptive] Stage 3 学习（影子模式）：{_n_attr} 条归因、{_n_adj} 条权重建议（未落库）")
+        print(f"[Adaptive] Stage 3 学习（影子模式）：{_n_attr} 条归因、{_n_adj} 条权重建议"
+              + ("（已带规范 category_id，可命中 DB 提示词权重）" if _name_to_cid else "")
+              + "（未落库）")
 
         # 2) Stage 5.2：检出置信度 <0.7 的类目 → 写入待审队列（前端弹窗人审）
         from engine.adaptive.active_learner import (
@@ -602,6 +772,25 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 image_path=input_path,
             )
             print(f"[Adaptive] 检出级不确定类目 {len(_uncertain)} 个已入队待人审（request={_fb2}）")
+
+        # 3) 写回最终检测到对应 episode（出图后补完）：
+        #    分割前 archive 只存语义/指纹，真实检测此时才产生。
+        #    保留 artifact / output_mode / preset / effective_auto_tune。
+        if LAST_EPISODE_ID:
+            try:
+                from engine.adaptive.episode_log_updater import update_episode_detections
+                _wb_ok = update_episode_detections(
+                    LAST_EPISODE_ID,
+                    detections=_dino_dets,
+                    artifact=output_path,
+                    output_mode=output_mode,
+                    preset=preset_name,
+                    effective_auto_tune=effective_auto_tune,
+                )
+                print(f"[Adaptive] 最终检测已写回 episode {LAST_EPISODE_ID}"
+                      + ("（含规范 category_id，保留 layer_name 契约）" if _name_to_cid else ""))
+            except Exception as wb_err:
+                print(f"[Adaptive] 最终检测写回失败（不影响主流程）: {wb_err}")
     except Exception as ln_err:
         print(f"[Adaptive] Stage 3/5.2 后置处理失败（不影响主流程）: {ln_err}")
 
@@ -1072,6 +1261,14 @@ if __name__ == "__main__":
              "design=RGBA 设计线（允许生成但须标记）；both=两条线各产一份。"
              "留空则读 preset 的 output.mode，再兜底为 design"
     )
+    parser.add_argument(
+        "--adaptive-mode",
+        choices=["locked", "auto", "hybrid"],
+        default=None,
+        help="自适应语义模式显式覆盖（跨类实验用）：locked/auto/hybrid。"
+             "缺省沿 preset 顶层 mode（不改生产 preset 默认行为）。"
+             "仅当 preset 顶层 mode 非 locked 时才生效（auto/hybrid 需 preset 含自适应配置）。"
+    )
 
     args = parser.parse_args()
 
@@ -1107,7 +1304,12 @@ if __name__ == "__main__":
             output_mode=job_mode.value,
             icc_override=args.icc,
             seed=args.seed,
+            adaptive_mode_override=args.adaptive_mode,
         )
-        # B5：出图后自动审计 + 回填 episode + 重建 CBR 索引（CLI 冷启动闭环）
+        # B5：出图后自动审计 + finalize_episode 收口 + 重建 CBR 索引（CLI 冷启动闭环）
         if str(os.environ.get("ULS_AUDIT_AFTER_RUN", "")).lower() in ("1", "true", "yes"):
-            _post_run_audit_and_sync(job_out, args.input)
+            _rc = _post_run_audit_and_sync(job_out, args.input, output_mode=job_mode.value)
+            # 严格测试环境：审计失败 / 报告不完整 / 未准入 → 传播为非零退出
+            if _audit_strict() and _rc != 0:
+                print(f"[Main] ULS_AUDIT_STRICT=1：审计收口失败（rc={_rc}），进程非零退出。")
+                sys.exit(_rc)

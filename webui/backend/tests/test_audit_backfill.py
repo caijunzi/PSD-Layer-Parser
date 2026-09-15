@@ -1,7 +1,9 @@
-"""B3：审计回填链路隔离验证（task_manager._backfill_episode_audit）。
+"""B3：审计回填链路隔离验证（逐产物 → 对应 episode，不再用末条日志猜）。
 
-背景：引擎归档发生在审计之前 → episode 的 audit_passed 恒 False → CBR 检索永远筛空。
-WebUI 任务流在审计完成后调用本链路回填。此前**未被任何测试覆盖**。
+背景：旧 `_backfill_episode_audit` 只审计单个产物（偏好 plate），却用「末条 episode
+日志」回填——both 模式下末条是 design episode，导致 plate 审计被错填到 design episode。
+现改为 `finalize_episode` 逐产物明确映射：plate 产物 → plate episode、design 产物 →
+design episode。本测试覆盖该映射与 CBR 索引准入。
 """
 import json
 import os
@@ -9,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -19,81 +22,111 @@ for p in (str(BACKEND), str(ROOT)):
         sys.path.insert(0, p)
 
 from core.task_manager import TaskManager  # noqa: E402
+from engine.adaptive.episode_archiver import (  # noqa: E402
+    archive_episode, load_episode_by_id, finalize_episode, DIM_KEYS, PLATE_DIM,
+)
 
 
-class TestAuditBackfill(unittest.TestCase):
+def _make_report(design_exempt=False, fail_dim=None):
+    dims = {k: {"passed": True, "evaluated": True, "na": False, "metrics": {}} for k in DIM_KEYS}
+    if design_exempt:
+        dims[PLATE_DIM]["na"] = True
+        dims[PLATE_DIM]["evaluated"] = False
+    if fail_dim is not None:
+        dims[fail_dim]["passed"] = False
+    return {"passed": fail_dim is None, "dims": dims}
+
+
+class TestPerArtifactFinalize(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         t = Path(self.tmp.name)
         self.ep = t / "episodes.jsonl"
         self.idx = t / "index.pkl"
-        self._old = {
-            k: os.environ.get(k) for k in ("ADAPTIVE_EPISODE_PATH", "ADAPTIVE_INDEX_PATH")
-        }
+        self._old = {k: os.environ.get(k) for k in ("ADAPTIVE_EPISODE_PATH", "ADAPTIVE_INDEX_PATH")}
         os.environ["ADAPTIVE_EPISODE_PATH"] = str(self.ep)
         os.environ["ADAPTIVE_INDEX_PATH"] = str(self.idx)
+        self.addCleanup(self._restore)
 
-        def restore():
-            for k, v in self._old.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
+    def _restore(self):
+        for k, v in self._old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
-        self.addCleanup(restore)
-
-    def test_backfill_updates_episode_and_rebuilds_index(self):
-        from engine.adaptive.episode_archiver import archive_episode, load_episode_by_id
-        from engine.adaptive.episode_indexer import EpisodeIndexer
-
+    def _archive_pair(self):
         emb = np.random.randn(128).astype(np.float32)
-        ep_id = archive_episode(
-            material_family="金地屏风",
-            category_ids=["water_ripples"],
+        ep_plate = archive_episode(
+            material_family="金地屏风", category_ids=["water_ripples"],
             fingerprint={"embedding": emb, "image_shape": (10, 10)},
-            image_path="x.jpg",
-            audit_8d=None,           # 归档时审计尚不存在（这正是要修复的场景）
+            image_path="x.jpg", output_mode="plate",
         )
+        emb2 = np.random.randn(128).astype(np.float32)
+        ep_design = archive_episode(
+            material_family="金地屏风", category_ids=["water_ripples"],
+            fingerprint={"embedding": emb2, "image_shape": (10, 10)},
+            image_path="x.jpg", output_mode="design",
+        )
+        return ep_plate, ep_design
 
-        # 构造审计结果（lost_ratio < 0.05 → 应判为通过）
+    def test_finalize_per_artifact_maps_correctly(self):
+        ep_plate, ep_design = self._archive_pair()
+        # 各自 finalize：plate 全过、design 豁免⑦全过
+        d_plate = finalize_episode(ep_plate, audit_report=_make_report(), output_mode="plate")
+        d_design = finalize_episode(ep_design, audit_report=_make_report(design_exempt=True),
+                                    output_mode="design")
+        self.assertTrue(d_plate["admitted"])
+        self.assertTrue(d_design["admitted"])
+
+        rec_p = load_episode_by_id(ep_plate, str(self.ep))
+        rec_d = load_episode_by_id(ep_design, str(self.ep))
+        self.assertIsNotNone(rec_p["audit_full"])
+        self.assertIsNotNone(rec_d["audit_full"])
+        self.assertEqual(rec_p["output_mode"], "plate")
+        self.assertEqual(rec_d["output_mode"], "design")
+
+        from engine.adaptive.episode_indexer import EpisodeIndexer
+        ix = EpisodeIndexer.load_or_create(self.idx)
+        self.assertIn(ep_plate, ix.fingerprints)
+        self.assertIn(ep_design, ix.fingerprints)
+
+    def test_finalize_missing_episode_is_noop(self):
+        # 先建日志（含一个真实 episode），再 finalize 一个不存在的 id → episode_not_found
+        self._archive_pair()
+        d = finalize_episode("ep_nonexistent", audit_report=_make_report(), output_mode="plate")
+        self.assertFalse(d["admitted"])
+        self.assertEqual(d["reason"], "episode_not_found")
+        self.assertFalse(self.idx.exists())  # 未准入，索引不应生成
+
+    def test_task_manager_maps_artifacts_to_episodes(self):
+        """TaskManager._finalize_artifacts 把 plate/design 产物明确映射到对应 episode。"""
+        ep_plate, ep_design = self._archive_pair()
+        tm = TaskManager()
         out = Path(self.tmp.name) / "out"
         out.mkdir(parents=True, exist_ok=True)
-        audit = {
-            "dims": {
-                "④ 内容承载": {"metrics": {"lost_ratio": 0.01}},
-                "⑤ 合成等价性": {"metrics": {"rmse_raw": 20.0, "rmse_lowfreq": 10.0}},
-                "⑦ plate 合规": {"metrics": {"plate_purity_ok": True, "tac_max_pct": 300.0}},
-                "① 层属性": {"metrics": {"layer_count": 42}},
-            }
+        # 模拟引擎日志：先 plate 后 design（与 jobs=[PLATE, DESIGN] 一致）
+        tm.tasks["t1"] = {"logs": [
+            {"message": f"[Adaptive] episode 已归档: {ep_plate}"},
+            {"message": f"[Adaptive] episode 已归档: {ep_design}"},
+        ]}
+        # 两个产物各自的审计报告（含 color_mode 真实产品线）
+        plate_report = dict(_make_report()); plate_report["color_mode"] = "cmyk"
+        design_report = dict(_make_report(design_exempt=True)); design_report["color_mode"] = "rgb"
+        audit_reports = {
+            str(out / "result.plate.psb"): (plate_report, "plate"),
+            str(out / "result.design.psb"): (design_report, "design"),
         }
-        (out / "result.audit.json").write_text(
-            json.dumps(audit, ensure_ascii=False), encoding="utf-8"
-        )
-
-        tm = TaskManager()
-        tm.tasks["t1"] = {"logs": [{"message": f"[Adaptive] episode 已归档: {ep_id}"}]}
-        tm._backfill_episode_audit("t1", out)
-
-        # episode 已回填 audit_8d
-        rec = load_episode_by_id(ep_id, str(self.ep))
-        self.assertIsNotNone(rec)
-        self.assertIsNotNone(rec.get("audit_8d"), "审计结果未回填到 episode")
-        self.assertAlmostEqual(rec["audit_8d"]["lost_ratio"], 0.01, places=6)
-
-        # 索引已重建且 audit_passed=True（修复前恒 False）
-        ix = EpisodeIndexer.load_or_create(self.idx)
-        self.assertIn(ep_id, ix.fingerprints)
-        self.assertTrue(ix.audit_status[ep_id])
-
-    def test_backfill_without_episode_id_is_noop(self):
-        out = Path(self.tmp.name) / "out2"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "result.audit.json").write_text("{}", encoding="utf-8")
-        tm = TaskManager()
-        tm.tasks["t2"] = {"logs": [{"message": "no episode here"}]}
-        tm._backfill_episode_audit("t2", out)   # 不应抛异常
-        self.assertFalse(self.idx.exists())
+        called = []
+        with patch("engine.adaptive.episode_archiver.finalize_episode",
+                   side_effect=lambda *a, **k: called.append((a, k)) or {"admitted": True}) as m:
+            tm._finalize_artifacts("t1", out, audit_reports, "both")
+        self.assertEqual(len(called), 2)
+        # 两路调用必须分别带正确的 episode（位置参）与 output_mode（关键字参）
+        by_om = {k["output_mode"]: a[0] for a, k in called}
+        self.assertEqual(by_om["plate"], ep_plate)
+        self.assertEqual(by_om["design"], ep_design)
 
 
 if __name__ == "__main__":
