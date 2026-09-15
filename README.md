@@ -28,7 +28,7 @@
 > ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
 > ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
 >    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
-> 当前回归基线：引擎 **209 passed / 2 skipped**，WebUI **34 passed**（2026-09-15）。真实绢本工笔两张样本分类均通过，但分层审计仍暴露内容承载/合成质量问题。
+> 当前回归基线：引擎 **216 passed / 2 skipped**，WebUI **34 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。
 > 本轮新增自适应字段桥接、审计回填、CBR 冷启动闭环和真实样本回归；最新九样本隔离 cold/repeat 证据见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整分析见 `docs/测试报告_20260915_全样本自适应链路收口.md`。历史首轮证据仍保留在 `outputs/adaptive-e2e-20260915-final/results.json`，油画 preset 修复后的独立复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`。
 
 ---
@@ -86,7 +86,29 @@
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
 3. `inherit_priors()` 在 `category_priors` 为空时**优雅跳过**；有真实先验时才复制，不手写未经验证的 seed
 
-> 引擎全量测试基线已更新为 **209 passed / 2 skipped**；WebUI **34 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> 引擎全量测试基线已更新为 **216 passed / 2 skipped**；WebUI **34 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+
+> **2026-09-16 修复批次（四项工程缺口）**：
+> ① **⑤ 合成等价性 CMYK 比对口径**：PLATE 产物是 ICC FOGRA39 真分色（有黑版），
+>    此前参考图却用 PIL 朴素 `convert('CMYK')`（K 恒为 0）→ K 通道系统性错配、RMSE 虚高。
+>    改为源图经**同一 ICC** 分色后比对（`_composite_rmse` 返回 `color_managed` 标记，ICC 缺失时
+>    回退并如实标注）。实测金地 36.49→**0.96**、商用图 32.51→**2.43**，均转为 8 维全过。
+> ② **指纹标准化/PCA 真正生效**：`_pca_model` 长期是 `"placeholder"`、`train_pca_from_dataset`
+>    生产零调用，embedding 实为**未标准化**的原始特征截断（各特征量纲差 4 个数量级，余弦检索被
+>    大尺度特征主导）。新增 `tools/train_pca.py`、模型持久化与 `_apply_pca` 自动加载；
+>    样本不足时只做真实标准化、不强行降维。
+> ③ **CBR 参数生产化**：`suggest_auto_tune` 此前 **import 了却从未调用**，`global_percentiles`
+>    被硬编码为 `{}`。现真实计算并归档；推荐密度带单列 `*_suggested` 字段**不自动注入生产**
+>    （`density_band_classes` 会直接产层，注入会破坏 cold/repeat 字节可复现）。
+> ④ **`category_priors` 真实先验**：新增 `tools/build_category_priors.py`，从真实 episode 检出
+>    统计面积/长宽比/紧凑度，并按父子关系**上卷到祖先**（否则二级父类无先验、`inherit_priors`
+>    依旧空转）。写入 19 条，`waterfalls`/`celestial`/`figures_animals` 等已可继承。
+>
+> **绢本工笔 preset 修正（重要）**：绢本两张样本此前误用 `textile_damask`（壁布，类目为
+> 巴洛克团花/金箔卷草纹样），与该图题材（牡丹/枝叶/禽鸟/山石/水面）完全不匹配 → AI 检测对
+> 壁布类目零产出、规则引擎退回屏风系 → ④ 内容承载丢 8.712%/20.004%、⑤ 合成 RMSE 26.72/44.63。
+> 改用 `chinese_ink_landscape_ai` 后 **8 维全过**：④ lost_ratio 降至 0.004%/0.292%，
+> ⑤ rmse_lowfreq 降至 1.86/2.17。**根因是 preset 选择错误，非算法能力不足**。
 
 ---
 

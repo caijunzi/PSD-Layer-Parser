@@ -648,7 +648,13 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 - ✅ `pytest tests/test_adaptive_tree.py`（7 例全绿：插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors 空表优雅跳过）
 - ✅ 迁移后 `SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL` = **13**（≥10 达标）
 
-> **2026-09-15 状态覆核**：类目 `rename / delete / merge` 已完成真实实现；`delete` 为软删除，`merge` 处理同名 prompt 冲突。测试基线以引擎 `209 passed / 2 skipped`、WebUI `34 passed` 为准。真实绢本工笔分类回归通过；最新九样本隔离 cold/repeat 复测已完成，水墨 3 张和油画均通过 8 维审计且 repeat 命中 CBR，绢本工笔仍因第 ④/⑤ 维分层质量问题被严格拒绝。完整证据见 `outputs/adaptive-e2e-20260915-rerun/results.json` 和 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> **2026-09-16 状态覆核**：测试基线更新为引擎 `216 passed / 2 skipped`、WebUI `34 passed`。
+> `category_priors` 已由 `tools/build_category_priors.py` 从真实 episode 检出统计写入 19 条
+> （含按父子关系上卷到二级/根），`inherit_priors()` 不再空转（`waterfalls`/`celestial`/`figures_animals`
+> 等可直接继承）；指纹标准化模型由 `tools/train_pca.py` 训练并随代码入库，
+> `_apply_pca` 首次调用自动加载；Auto-Tune 参数真实计算并归档（`suggest_auto_tune` 此前从未被调用）。
+>
+> **2026-09-15 状态覆核**：类目 `rename / delete / merge` 已完成真实实现；`delete` 为软删除，`merge` 处理同名 prompt 冲突。真实绢本工笔分类回归通过；最新九样本隔离 cold/repeat 复测已完成，水墨 3 张和油画均通过 8 维审计且 repeat 命中 CBR，绢本工笔仍因第 ④/⑤ 维分层质量问题被严格拒绝。完整证据见 `outputs/adaptive-e2e-20260915-rerun/results.json` 和 `docs/测试报告_20260915_全样本自适应链路收口.md`。
   - 总数 27（原 20 + 新增 8：1 根 + 7 二级）
   - path 正确计算，如 `/landscape_painting/distant_mountains/`
 

@@ -117,3 +117,48 @@ provider 写入：`layer_name` / `prompt` / `boxes` / `logits` / `num_boxes` /
 `instance_split` + 门阶段补 `quality_gate_passed` / `quality_gate_reason` /
 `diffuse_gate_passed` / `diffuse_gate_reason`。
 attribution.py 按 **`layer_name`**（不是 category_id）取类目 —— 用错字段会静默 0 归因。
+## 2026-09-16 修复批次（长期事实，勿回退）
+
+### ⑤ 合成等价性必须用**同 ICC** 比对
+`tools/audit_psb._composite_rmse` 的参考图必须是「源图经**同一 ICC** 分色」，不能再用
+PIL 朴素 `convert('CMYK')`：后者 **K 通道恒为 0**（无黑版），而 PLATE 产物是 ICC 真分色
+（K≈48.5）→ K 通道系统性错配、RMSE 虚高（金地 36.49 实为 0.96、商用图 32.51 实为 2.43）。
+函数返回 `(raw, low, color_managed)`；ICC 缺失时回退朴素转换并置 `color_managed=False`
++ `note` 标注，**绝不静默**。
+⚠️ 入参是 **BGR**（函数内转 RGB）；写测试时传 RGB 会通道交换，全零图看不出、彩色图立刻暴露。
+
+### 指纹标准化模型位置与加载
+- 模型：`engine/adaptive/fingerprint_pca.pkl`（2.4 KB，随代码入库）。
+  **切勿放 `checkpoints/` 或 `models/`**——二者被 `.gitignore` 忽略，clone 后静默失效。
+- `_apply_pca` 首次调用**自动加载**（`_pca_loaded` 幂等哨兵）；训练入口 `tools/train_pca.py`。
+- `n_components` 必自适应 `min(期望, 特征数, 样本数-1)`；**样本 <20 时只标准化不降维**
+  （9 张图主成分仅 8，强行降维反丢信息）。原始特征 84 维。
+- 未训练时回退旧的截断/填充行为（向后兼容，不报错），embedding 长度恒 128（CBR 索引硬要求）。
+
+### CBR 参数**不自动注入生产**（保护 RK-16）
+`suggest_auto_tune` 真实计算并归档 `global_percentiles`；
+推荐密度带/热点区单列 `density_bands_suggested` / `regions_suggested`，**只归档不注入**。
+原因：`density_band_classes` 会被 `grounded_sam_provider` **直接产层**，注入会新增图层、
+改变分层结果 → **破坏 cold/repeat 字节可复现**。
+判据：修复后新跑产物 SHA 与修复前完全一致即为安全。
+
+### `category_priors` 生成方式
+入口 `tools/build_category_priors.py`（从真实 episode 检出统计，含**按父子关系上卷到祖先**）。
+必须上卷：episode 的 category_id 都是三级，只写三级则二级父类无先验、`inherit_priors` 依旧空转。
+只写库中**已存在**的类目（不臆造 ID）；`--min-samples` 默认 3；写入前自动备份 DB。
+注：引擎面积预算走 `grounded_sam_provider.area_budget_for`（硬编码关键词表），**不读本表**。
+
+### 绢本工笔花鸟必须用 `chinese_ink_landscape_ai`（不是 textile_damask）★
+绢本工笔（花鸟题材：牡丹/枝叶/禽鸟/山石/水面）若用 `textile_damask`（壁布，类目=巴洛克团花/
+金箔卷草纹样）会完全不匹配 → ④内容承载丢 8.712%/20.004%、⑤RMSE 26.72/44.63。
+改用 `chinese_ink_landscape_ai` 后 **8 维全过**：④→0.004%/0.292%，⑤→1.86/2.17。
+`tools/run_all_samples_e2e.py` 的 CASES 已固化该映射。
+待办：应为「绢本工笔花鸟」建独立 preset，并在材质→preset 路由中体现
+（材质判别仍把绢本/壁布同判为「绢本工笔」，同属织物+暖色）。
+
+### 壁布 plate ⑤ 未闭环（已知残余）
+`damask_sample.png` 用 `textile_damask`：该 preset 类目仅 2 个 → AI 零掩模产出；
+provider 规则引擎产出屏风系类目 → 被 `rule_class_allowlist` 全部丢弃 → 产物只剩底板+残层
+（4 层）→ 花纹丢失、合成偏亮。修复需按品类重建类目与掩模链路。
+⚠️ 附带发现：`④ 内容承载` 此处未报错，因残/工艺层 bbox 均为全画布、掩码并集覆盖全图
+形成**假通过**（待查）。

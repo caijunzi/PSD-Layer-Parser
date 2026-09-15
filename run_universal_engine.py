@@ -527,12 +527,46 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 try:
                     from engine.adaptive.auto_tune import suggest_auto_tune
                     import copy
+
+                    # 真实计算图级调优参数（2026-09-16 修复）：
+                    # 此前 import 了 suggest_auto_tune 却**从未调用**，global_percentiles
+                    # 被硬编码为 {}，导致归档的 auto_tune 恒为空、CBR 命中也无参数可复用。
+                    # 密度场对分辨率不敏感，先降采样到长边 1024，避免大图（16K）上耗时失控。
+                    _suggested = None
+                    if src_lr_temp is not None:
+                        _at_img = src_lr_temp
+                        try:
+                            _mx = max(_at_img.shape[:2])
+                            if _mx > 1024:
+                                _s = 1024.0 / _mx
+                                _at_img = cv2.resize(
+                                    _at_img,
+                                    (max(1, int(_at_img.shape[1] * _s)),
+                                     max(1, int(_at_img.shape[0] * _s))),
+                                    interpolation=cv2.INTER_AREA)
+                        except Exception:
+                            _at_img = src_lr_temp
+                        _suggested = suggest_auto_tune(_at_img, classes=merged)
+
                     effective_auto_tune = {
-                        "global_percentiles": {},
+                        # 真实统计（纯描述，不影响产物）
+                        "global_percentiles": (_suggested or {}).get("global_percentiles", {}) or {},
+                        # 生产生效的结构参数：仅取类目已有 region 与 preset 已配置的密度带
                         "regions": {(c.get("name") or c.get("layer_name")): {k: copy.deepcopy(c[k]) for k in ("region", "regions") if k in c}
                                     for c in merged if (c.get("name") or c.get("layer_name")) and ("region" in c or "regions" in c)},
-                        "density_bands": copy.deepcopy(preset.get("density_band_classes", [])),
+                        "density_bands": copy.deepcopy(preset.get("density_band_classes") or []),
+                        # 本次推荐（含九宫格兜底带）单独归档，供人工采纳/分析：
+                        # **不自动注入生产** —— density_band_classes 会直接产层
+                        # （grounded_sam_provider），自动注入会改变分层结果并破坏
+                        # cold/repeat 字节可复现。CBR 复用只取上面「已生效」的参数。
+                        "density_bands_suggested": copy.deepcopy((_suggested or {}).get("density_bands") or []),
+                        "regions_suggested": copy.deepcopy((_suggested or {}).get("regions") or []),
                     }
+                    if _suggested is not None:
+                        _gp = effective_auto_tune["global_percentiles"]
+                        print(f"[Adaptive] auto_tune 已计算：p50={_gp.get('p50')} p90={_gp.get('p90')} "
+                              f"p95={_gp.get('p95')}；推荐密度带 "
+                              f"{len(effective_auto_tune['density_bands_suggested'])} 条（不自动注入）")
                 except Exception as at_err:
                     print(f"[Adaptive] auto_tune 计算失败（不影响主流程）: {at_err}")
                     effective_auto_tune = None

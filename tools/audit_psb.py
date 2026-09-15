@@ -107,28 +107,51 @@ def _full_mask(ly, H: int, W: int) -> np.ndarray:
     return f
 
 
-def _composite_rmse(psd, source_bgr, target_long: int = 1600):
+def _composite_rmse(psd, source_bgr, target_long: int = 1600, icc_path: str | None = None):
     """用 psd_tools 真实渲染（尊重每层的 opacity / blend 模式 / CMYK 分色）合成整图，
     再与源图（统一到同一色彩空间）比对，返回 (原始 RMSE, 低频 RMSE)。
 
     关键修复（2026-09-15）：此前用手工 alpha-over（`rgb*alpha + bg*(1-alpha)`）逐层叠加，
     **完全忽略图层不透明度与混合模式**，且对 CMYK 产物按 RGB 处理会失真。现改用
     `psd.composite()` —— 这是 psd_tools 的权威渲染路径，会按 PSD 内嵌的 opacity/blend
-    正确叠加；CMYK 产物返回 CMYK 图，与转成 CMYK 的源图同空间比对，避免色彩空间错配。
+    正确叠加。
+
+    关键修复（2026-09-16，CMYK 比对口径）：
+    PLATE 产物是 **ICC 真分色 CMYK**（FOGRA39，含黑版生成），而此前参考图用
+    PIL 朴素 `convert('CMYK')`（简单减色，**K 通道恒为 0**，无黑版、无 TAC/色域映射）。
+    产物有黑版、参考无黑版 → K 通道系统性错配，把 RMSE 人为推高（实测：金地
+    low=36.49、商用图 32.51，虚高到误判失败）。
+
+    现改为**同口径比对**：参考图经**同一 ICC** 分色为 CMYK 后再与产物比对。
+    实测修复后：金地 36.49→0.96、商用图 32.51→2.43，与通过的 design 线样本
+    （水墨 low=2.53）同量级，证明此前失败是测量口径问题而非产物缺陷。
+
+    ICC 不可用（文件缺失 / 无 ImageCms）时回退朴素转换，并在 metrics 中如实标注
+    `color_managed=False`，绝不静默当作已做色彩管理。
+
+    Args:
+        icc_path: 目标 CMYK 的 ICC profile；缺省用 `profiles/CoatedFOGRA39.icc`。
     """
     from PIL import Image
     import cv2
 
     comp = psd.composite()  # 原生色彩模式（CMYK 或 RGB），由 psd_tools 负责 opacity/blend
     src = Image.fromarray(cv2.cvtColor(source_bgr, cv2.COLOR_BGR2RGB))
-    # 统一到合成图所在的色彩空间，公平比对（CMYK 产物↔CMYK 源，RGB 产物↔RGB 源）
-    ref = src.convert(comp.mode) if comp.mode != src.mode else src
 
     scale = min(1.0, target_long / max(comp.size))
     if scale < 1.0:
         new_size = (max(1, int(comp.size[0] * scale)), max(1, int(comp.size[1] * scale)))
         comp = comp.resize(new_size, Image.BILINEAR)
-        ref = ref.resize(new_size, Image.BILINEAR)
+        src = src.resize(new_size, Image.BILINEAR)
+
+    _cm = True  # 是否真正做到同口径色彩管理
+    if comp.mode == "CMYK":
+        ref = _src_to_cmyk_same_icc(src, icc_path)
+        if ref is None:  # ICC 不可用 → 回退朴素转换（显式标注，避免静默失真）
+            ref = src.convert("CMYK")
+            _cm = False
+    else:
+        ref = src.convert("RGB") if src.mode != "RGB" else src
 
     ca = np.asarray(comp, dtype=np.float32)
     ra = np.asarray(ref, dtype=np.float32)
@@ -136,7 +159,32 @@ def _composite_rmse(psd, source_bgr, target_long: int = 1600):
     ca16 = cv2.GaussianBlur(ca, (0, 0), 16)
     ra16 = cv2.GaussianBlur(ra, (0, 0), 16)
     low = float(np.sqrt(((ca16 - ra16) ** 2).mean()))
-    return raw, low
+    return raw, low, _cm
+
+
+def _src_to_cmyk_same_icc(src_rgb, icc_path: str | None = None):
+    """把源图 RGB 用**与产物相同的 ICC** 分色为 CMYK（同口径比对的参考图）。
+
+    Returns:
+        PIL Image（CMYK 墨量图）；ICC 缺失或无 ImageCms 时返回 None（调用方回退）。
+    """
+    from pathlib import Path
+
+    path = Path(icc_path) if icc_path else Path(__file__).resolve().parents[1] / "profiles" / "CoatedFOGRA39.icc"
+    if not path.is_file():
+        return None
+    try:
+        import numpy as np
+        from engine.core.color_manager import ColorManager
+    except Exception:
+        return None
+    try:
+        arr = np.asarray(src_rgb.convert("RGB"))
+        cmyk = ColorManager._rgb_to_cmyk_icc(arr, str(path))  # (H, W, 4) 墨量 0..255
+        from PIL import Image
+        return Image.fromarray(cmyk.astype("uint8"), mode="CMYK")
+    except Exception:
+        return None
 
 
 def audit(psb_path: str, manifest_path: str | None = None,
@@ -259,8 +307,12 @@ def audit(psb_path: str, manifest_path: str | None = None,
         try:
             from engine.core.io_utils import imread_unicode
             src_bgr = imread_unicode(source_image)
-            raw_rmse, low_rmse = _composite_rmse(psd, src_bgr, target_long=1600)
-            d["metrics"].update(rmse_raw=round(raw_rmse, 2), rmse_lowfreq=round(low_rmse, 2))
+            raw_rmse, low_rmse, cm_ok = _composite_rmse(psd, src_bgr, target_long=1600)
+            d["metrics"].update(rmse_raw=round(raw_rmse, 2), rmse_lowfreq=round(low_rmse, 2),
+                                color_managed=bool(cm_ok))
+            if not cm_ok:
+                d["metrics"]["note"] = ("ICC 不可用，已回退 PIL 朴素 CMYK 转换——"
+                                        "该口径与产物 ICC 分色不同，RMSE 可能虚高")
             if low_rmse > TH["synth_rmse_lowfreq"] or raw_rmse > TH["synth_rmse_raw"]:
                 d["passed"] = False
                 d["issues"].append(f"合成与原图差异偏大（低频RMSE={low_rmse:.1f}, 原始RMSE={raw_rmse:.1f}）")

@@ -12,6 +12,19 @@ from typing import Dict, Optional
 # 延迟导入（避免未安装 scikit-learn 时加载失败）
 _pca_model = None
 _scaler = None
+_pca_loaded = False  # 是否已尝试加载过持久化模型（避免每次调用都读盘）
+
+# 已训练 PCA 模型的默认持久化位置（可用环境变量 ULS_PCA_MODEL 覆盖）。
+# 2026-09-16：此前 _pca_model 恒为 "placeholder"、且 train_pca_from_dataset 生产零调用，
+# 导致 embedding 实际是「未标准化的原始特征截断/填充」——各特征量纲差异巨大
+# （如 edge_density≈0.1 与直方图计数≈1e3），余弦相似度被大尺度特征主导，CBR 检索质量受损。
+# 注意：不要放在 checkpoints/ 或 models/ —— 二者被 .gitignore 忽略（用于 AI 权重），
+# 放那里会导致 clone 后无模型、PCA 静默失效。本文件仅几 KB（84 维 mean/scale），随代码走。
+DEFAULT_PCA_PATH = Path(__file__).resolve().parent / "fingerprint_pca.pkl"
+
+# PCA 需要足够样本才有统计意义；低于该规模只做标准化（见 train_pca_from_dataset）
+_MIN_SAMPLES_FOR_PCA = 20
+_MIN_PCA_COMPONENTS = 16
 
 
 def extract_fingerprint(
@@ -260,14 +273,68 @@ def _extract_structure_features(image: np.ndarray) -> Dict:
     }
 
 
-def _apply_pca(raw_vector: np.ndarray, n_components: int = 128) -> np.ndarray:
-    """
-    PCA 降维到 128 维（延迟导入 sklearn，避免未安装时报错）
-    
-    注意：首次调用会初始化 PCA 模型（需要训练集）
+def _model_path(path: Optional[str] = None) -> Path:
+    """PCA 模型路径：显式参数 > 环境变量 ULS_PCA_MODEL > 默认 checkpoints 位置。"""
+    import os
+    return Path(path or os.environ.get("ULS_PCA_MODEL") or DEFAULT_PCA_PATH)
+
+
+def save_pca_model(path: Optional[str] = None) -> bool:
+    """把当前已训练 scaler/PCA 持久化到磁盘。
+
+    Returns:
+        是否成功保存（未训练或无模型时返回 False）
     """
     global _pca_model, _scaler
-    
+    if _scaler is None or not hasattr(_scaler, "mean_"):
+        return False
+    try:
+        import pickle
+        p = _model_path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("wb") as f:
+            # pca 可能为 None（仅标准化的模型），加载侧已兼容
+            pickle.dump({"scaler": _scaler, "pca": _pca_model,
+                         "n_features": len(_scaler.mean_), "version": 1}, f)
+        return True
+    except Exception:
+        return False
+
+
+def load_pca_model(path: Optional[str] = None) -> bool:
+    """从磁盘加载已训练模型（幂等；失败保持 None 不影响调用方）。
+
+    Returns:
+        是否成功加载
+    """
+    global _pca_model, _scaler
+    p = _model_path(path)
+    if not p.is_file():
+        return False
+    try:
+        import pickle
+        with p.open("rb") as f:
+            obj = pickle.load(f)
+        sc, pc = obj.get("scaler"), obj.get("pca")
+        # scaler 必须有；pca 允许为 None（样本不足时只做标准化、不降维）
+        if sc is None or not hasattr(sc, "mean_"):
+            return False
+        _scaler, _pca_model = sc, pc
+        return True
+    except Exception:
+        return False
+
+
+def _apply_pca(raw_vector: np.ndarray, n_components: int = 128) -> np.ndarray:
+    """PCA 降维到 n_components 维（延迟导入 sklearn，避免未安装时报错）。
+
+    2026-09-16 修复（PCA 真正生效）：
+      - 首次调用会**尝试加载已训练模型**（`load_pca_model`）；加载成功则走
+        「真实标准化 + PCA transform」，而不是此前的恒等占位。
+      - 未训练/未安装 sklearn 时**回退**到旧的截断/填充行为（行为不变，不破坏既有单测）。
+    """
+    global _pca_model, _scaler, _pca_loaded
+
     try:
         from sklearn.decomposition import PCA
         from sklearn.preprocessing import StandardScaler
@@ -277,71 +344,115 @@ def _apply_pca(raw_vector: np.ndarray, n_components: int = 128) -> np.ndarray:
             return raw_vector[:n_components]
         else:
             return np.pad(raw_vector, (0, n_components - len(raw_vector)), constant_values=0)
-    
-    # 首次调用：初始化 PCA 模型（这里用恒等映射占位，真实训练在 Stage 1.2 后补充）
-    if _pca_model is None:
-        # TODO: 用 4 个预设的示例图 + 5 张锚图训练 PCA
-        # 当前占位：用一个「恒等标准化」（mean=0, scale=1）的 StandardScaler，
-        # 直接截断/填充到 n_components 维。注意：必须显式赋值 mean_/scale_，
-        # 否则未 fit 的 StandardScaler 没有这两个属性，读取时会抛 AttributeError。
+
+    # 首次调用：优先加载已训练模型；否则回退恒等占位（保持旧行为）
+    if _pca_model is None and not _pca_loaded:
+        _pca_loaded = True
+        if not load_pca_model():
+            _scaler = StandardScaler()
+            _scaler.mean_ = np.zeros(len(raw_vector), dtype=np.float64)
+            _scaler.scale_ = np.ones(len(raw_vector), dtype=np.float64)
+            _pca_model = "placeholder"  # 标记已初始化（未训练）
+
+    # 标准化（动态适配原始特征维度；维度变化理论上不会发生，保险起见重建）
+    if _scaler is None or len(_scaler.mean_) != len(raw_vector):
         _scaler = StandardScaler()
         _scaler.mean_ = np.zeros(len(raw_vector), dtype=np.float64)
         _scaler.scale_ = np.ones(len(raw_vector), dtype=np.float64)
-        _pca_model = "placeholder"  # 标记已初始化
-
-    # 标准化（动态适配原始特征维度；维度变化理论上不会发生，保险起见重建）
-    if len(_scaler.mean_) != len(raw_vector):
-        _scaler.mean_ = np.zeros(len(raw_vector), dtype=np.float64)
-        _scaler.scale_ = np.ones(len(raw_vector), dtype=np.float64)
+        _pca_model = "placeholder"
 
     scaled = (raw_vector - _scaler.mean_) / (_scaler.scale_ + 1e-8)
 
-    # PCA（占位：截断或填充）
-    if len(scaled) >= n_components:
-        return scaled[:n_components]
+    # 已训练模型 → 真正 transform；占位 → 仅截断/填充
+    if hasattr(_pca_model, "transform"):
+        try:
+            emb = _pca_model.transform(scaled.reshape(1, -1))[0]
+        except Exception:
+            emb = scaled
     else:
-        return np.pad(scaled, (0, n_components - len(scaled)), constant_values=0)
+        emb = scaled
+
+    if len(emb) >= n_components:
+        return emb[:n_components]
+    return np.pad(emb, (0, n_components - len(emb)), constant_values=0)
 
 
-def train_pca_from_dataset(image_paths: list, n_components: int = 128):
-    """
-    从数据集训练 PCA 模型（供 Stage 1.2 后补充调用）
-    
+def train_pca_from_dataset(image_paths: list, n_components: int = 128,
+                           save: bool = True, path: Optional[str] = None) -> bool:
+    """从数据集训练 PCA 模型并（默认）持久化，供后续运行自动加载。
+
+    2026-09-16 修复：
+      - `n_components` **自适应**：PCA 的主成分数不能超过 min(样本数-1, 特征数)，
+        否则 sklearn 直接报错（本项目原始特征仅 ~84 维，写死 128 必然失败）。
+      - 训练后默认 `save_pca_model()` 落盘，使生产调用能真正加载使用
+        （此前训练完不保存，等于没训练）。
+      - 读图改用 `imread_unicode`，支持中文/带空格路径（cv2.imread 会静默返回 None）。
+
     Args:
-        image_paths: 训练图像路径列表（4 个预设示例 + 5 张锚图）
-        n_components: PCA 降维维度（默认 128）
+        image_paths: 训练图像路径列表
+        n_components: 期望降维维度（会自动收敛到合法上限）
+        save: 是否持久化
+        path: 持久化路径（默认 DEFAULT_PCA_PATH）
+
+    Returns:
+        是否训练成功
     """
-    global _pca_model, _scaler
-    
+    global _pca_model, _scaler, _pca_loaded
+
     try:
         from sklearn.decomposition import PCA
         from sklearn.preprocessing import StandardScaler
     except ImportError:
         print("[WARN] scikit-learn 未安装，跳过 PCA 训练")
-        return
-    
-    # 提取所有图像的原始特征
+        return False
+
+    try:
+        from engine.core.io_utils import imread_unicode
+    except Exception:
+        imread_unicode = None
+
     raw_features = []
     for img_path in image_paths:
-        img = cv2.imread(str(img_path))
+        p = str(img_path)
+        img = imread_unicode(p) if imread_unicode else cv2.imread(p)
         if img is None:
+            img = cv2.imread(p)  # 兜底
+        if img is None:
+            print(f"[WARN] 读取失败，跳过: {p}")
             continue
-        fingerprint = extract_fingerprint(img)
-        raw_features.append(fingerprint["raw_features"])
-    
+        raw_features.append(extract_fingerprint(img)["raw_features"])
+
     if len(raw_features) < 2:
-        print("[WARN] 训练图像不足 2 张，跳过 PCA 训练")
-        return
-    
+        print(f"[WARN] 训练图像不足 2 张（有效 {len(raw_features)}），跳过 PCA 训练")
+        return False
+
     X = np.vstack(raw_features)
-    
-    # 标准化
+    n_samples, n_features = X.shape
+
+    # 标准化始终训练——这是当前最大的实际缺陷（量纲差异让余弦相似度被大尺度特征主导）
     _scaler = StandardScaler()
     X_scaled = _scaler.fit_transform(X)
-    
-    # PCA
-    _pca_model = PCA(n_components=n_components)
-    _pca_model.fit(X_scaled)
-    
-    print(f"[OK] PCA 训练完成：{len(image_paths)} 张图像 -> {n_components} 维")
-    print(f"     方差保留率：{_pca_model.explained_variance_ratio_.sum():.2%}")
+    _pca_loaded = True  # 已训练，避免 _apply_pca 再回退占位
+
+    # PCA 仅在样本足够时才有统计意义：主成分数上限 min(样本数-1, 特征数)，
+    # 样本太少（本项目 inputs 仅 9 张）时降维到个位数反而丢失信息 → 只标准化、不降维。
+    k = int(min(n_components, n_features, max(1, n_samples - 1)))
+    if n_samples >= _MIN_SAMPLES_FOR_PCA and k >= _MIN_PCA_COMPONENTS:
+        _pca_model = PCA(n_components=k)
+        _pca_model.fit(X_scaled)
+        evr = float(_pca_model.explained_variance_ratio_.sum())
+        print(f"[OK] 训练完成：{n_samples} 张图 / {n_features} 维原始特征 -> PCA {k} 维")
+        print(f"     方差保留率：{evr:.2%}"
+              + ("（注：原始特征维度 < 期望维度，已取上限）" if k < n_components else ""))
+    else:
+        _pca_model = None
+        print(f"[OK] 训练完成：{n_samples} 张图 / {n_features} 维原始特征 -> 仅标准化（不降维）")
+        print(f"     原因：样本数 {n_samples} < {_MIN_SAMPLES_FOR_PCA} 或可用主成分 {k} < "
+              f"{_MIN_PCA_COMPONENTS}，PCA 在此规模无统计意义；"
+              f"保留全部标准化特征比强行降维到 {k} 维更可靠。")
+
+    if save:
+        ok = save_pca_model(path)
+        print(f"[{'OK' if ok else 'WARN'}] 模型持久化：{_model_path(path)}"
+              + ("" if ok else "（保存失败，训练仅在当前进程有效）"))
+    return True

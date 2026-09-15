@@ -221,12 +221,30 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 > ⚠️ **注意**：`01-architecture.md` 中描述的 `episodes` 数据库表与 WebSocket/SSE 推送
 > **均未落地**，实际以本节与 `03-implementation-plan.md` 的修正注记为准。
 
-### 8.4 测试基线（2026-09-15）
+### 8.4 测试基线（2026-09-16）
 
-引擎全量：**209 passed / 2 skipped**；WebUI：**34 passed**。
-专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。最新九样本隔离 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+引擎全量：**216 passed / 2 skipped**；WebUI：**34 passed**。
+专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。九样本隔离 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
 
-本次复测共 18 次运行，18 个 PSB 均生成，9/9 样本达到 cold/repeat 字节可复现，生产 DB 哈希未变化。8/18 次通过 8 维审计；水墨 3 张和油画的 repeat 均满足日志白名单命中及 episode `notes` 中 `cbr_reused=1`。CBR 命中案例的 Auto-Tune 结构化参数为空，因此只能确认案例命中与复用标记，不能宣称结构化参数已应用。绢本工笔两张仍因第 ④/⑤ 维真实质量指标失败，不进入 CBR。
+上一轮复测共 18 次运行，18 个 PSB 均生成，9/9 样本达到 cold/repeat 字节可复现，生产 DB 哈希未变化。8/18 次通过 8 维审计；水墨 3 张和油画的 repeat 均满足日志白名单命中及 episode `notes` 中 `cbr_reused=1`。
+
+**2026-09-16 修复批次（四项工程缺口）**：
+
+| 缺口 | 根因 | 修复 | 实测 |
+| :--- | :--- | :--- | :--- |
+| ⑤ 合成等价性 | PLATE 产物为 ICC 真分色（有黑版），参考图却用 PIL 朴素 `convert('CMYK')`（K≡0）→ K 通道错配、RMSE 虚高 | 参考图改用**同一 ICC** 分色比对；`color_managed` 标记 + ICC 缺失回退 | 金地 36.49→**0.96**、商用图 32.51→**2.43**，均转全过 |
+| 指纹 PCA | `_pca_model="placeholder"`，训练函数生产零调用；embedding 未标准化 | `tools/train_pca.py` + 持久化 + `_apply_pca` 自动加载；样本不足只标准化不降维 | scaler 为真实统计（`mean=[1.95,4.29,72.2…]`），84 维同量纲 |
+| CBR 参数 | `suggest_auto_tune` import 却从未调用，`global_percentiles` 硬编码 `{}` | 真实计算并入 episode；推荐带单列 `*_suggested`，**不自动注入生产** | `p50=0.0592 p90=0.1899`；产物 SHA 不变（可复现保持） |
+| `category_priors` | 空表 → `inherit_priors` 空转 | `tools/build_category_priors.py` 从真实检出统计 + 父子上卷 | 写入 19 条；二级/根已有先验，继承可用 |
+
+**绢本工笔 preset 修正**：绢本两张此前误用 `textile_damask`（壁布类目），与题材（花鸟）不匹配 →
+④丢 8.712%/20.004%、⑤ RMSE 26.72/44.63 失败。改用 `chinese_ink_landscape_ai` 后 **8 维全过**：
+④ 降至 0.004%/0.292%，⑤ 降至 1.86/2.17。**根因是 preset 选择错误**。
+
+**残余项（未闭环）**：壁布 plate（`damask_sample.png`）⑤ 仍失败。根因已定位：`textile_damask`
+的 `ai_semantic_classes` 仅 2 个类目（巴洛克团花/金箔卷草纹样），对测试图零掩模产出；provider 规则
+引擎产出的屏风系类目被 `rule_class_allowlist` 全部丢弃 → 产物只剩底板+残层 → 花纹内容丢失、合成偏亮。
+修复需按品类重建该 preset 的类目与掩模链路，属独立专项。
 
 ### 8.5 测试环境（重要）
 

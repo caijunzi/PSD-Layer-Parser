@@ -19,8 +19,15 @@ CASES = [
     ("明代写意山水画创作.jpeg", "chinese_ink_landscape_ai", "design", "明代水墨"),
     ("元代.png", "chinese_ink_landscape_ai", "design", "元代水墨"),
     ("油画.jpeg", "western_oil_painting", "design", "油画"),
-    ("绢本工笔画-1.jpeg", "textile_damask", "design", "绢本工笔真值 1"),
-    ("绢本工笔画-2.jpeg", "textile_damask", "design", "绢本工笔真值 2"),
+    # 绢本工笔（花鸟题材：牡丹/枝叶/禽鸟/山石/水面）与壁布 preset 的类目
+    # （巴洛克团花/金箔卷草纹样）完全不匹配 —— 2026-09-16 实测：用 textile_damask
+    # 跑绢本时 AI 检测对壁布类目零产出、规则引擎退回屏风系，
+    # ④内容承载丢 8.712%/20.004%、⑤合成 RMSE 26.7/44.6 均失败。
+    # 改用 chinese_ink_landscape_ai（含 trees_vegetation / fauna_geese / plum_blossom /
+    # mountains_cliffs / water_ripples 等花鸟+山水类目）后 8 维全过：
+    # ④ lost_ratio 8.712% → 0.004%，⑤ rmse_lowfreq 26.72 → 1.86。
+    ("绢本工笔画-1.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 1"),
+    ("绢本工笔画-2.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 2"),
 ]
 
 def sha(path):

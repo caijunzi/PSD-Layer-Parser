@@ -44,23 +44,46 @@ class TestCompositeRealAPI(unittest.TestCase):
             def composite(self):
                 calls["n"] += 1
                 return real
-        raw, low = _composite_rmse(FakePSD(), src, target_long=40)
+        raw, low, _cm = _composite_rmse(FakePSD(), src, target_long=40)
         self.assertEqual(calls["n"], 1, "必须使用 psd.composite() 真实合成")
         self.assertAlmostEqual(raw, 0.0, places=5)
         self.assertAlmostEqual(low, 0.0, places=5)
+        self.assertTrue(_cm, "RGB 产物不依赖 ICC，应标注已色彩管理")
 
-    def test_composite_handles_cmyk_by_matching_source_space(self):
+    def test_composite_cmyk_uses_same_icc_reference(self):
+        """CMYK 产物必须用**同一 ICC** 分色的参考图比对（同口径），而非 PIL 朴素转换。
+
+        构造自洽用例：产物 = 源图经项目 ICC 分色 → 与同 ICC 参考比对，RMSE 应≈0。
+        这是 2026-09-16 修复的核心回归——此前用 PIL 朴素 convert（K 恒 0）导致虚高。
+        """
+        import cv2
+        from tools.audit_psb import _src_to_cmyk_same_icc
+        rng = np.random.default_rng(0)
+        src_rgb = rng.integers(0, 256, (40, 40, 3), dtype=np.uint8)
+        prod = _src_to_cmyk_same_icc(Image.fromarray(src_rgb))
+        if prod is None:
+            self.skipTest("ICC/ImageCms 不可用，无法验证同口径比对")
+        # 注意：_composite_rmse 入参是 BGR（内部自行转 RGB），测试须按契约传 BGR，
+        # 否则通道被交换，随机彩色图会立刻暴露（全零图看不出来）。
+        src_bgr = cv2.cvtColor(src_rgb, cv2.COLOR_RGB2BGR)
+        raw, low, cm_ok = _composite_rmse(_fake_psd(prod), src_bgr, target_long=40)
+        self.assertTrue(cm_ok, "ICC 可用时必须走同口径色彩管理")
+        self.assertLess(raw, 1.0, f"同 ICC 分色产物应与参考几乎一致，实际 raw={raw:.3f}")
+        self.assertLess(low, 1.0, f"同 ICC 分色产物应与参考几乎一致，实际 low={low:.3f}")
+
+    def test_composite_falls_back_and_flags_when_icc_missing(self):
+        """ICC 不可用 → 回退 PIL 朴素转换，并显式标注 color_managed=False（不静默）。"""
         src = np.zeros((40, 40, 3), dtype=np.uint8)
-        cmyk = Image.fromarray(src).convert("CMYK")  # (0,0,0,0)
-        raw, low = _composite_rmse(_fake_psd(cmyk), src, target_long=40)
-        # CMYK 产物与转 CMYK 的源图(全 0)同空间 → RMSE 应为 0
-        self.assertAlmostEqual(raw, 0.0, places=5)
+        cmyk = Image.fromarray(src).convert("CMYK")
+        raw, low, cm_ok = _composite_rmse(_fake_psd(cmyk), src, target_long=40,
+                                           icc_path=str(ROOT / "__no_such_icc__.icc"))
+        self.assertFalse(cm_ok, "ICC 缺失时必须标注未做色彩管理")
 
     def test_composite_downscales_large(self):
         # 模拟大图：用 400x400 但 target_long=100 → 应被缩到 100 宽
         big = Image.fromarray(np.zeros((400, 400, 3), dtype=np.uint8))
-        raw, low = _composite_rmse(_fake_psd(big),
-                                   np.zeros((400, 400, 3), dtype=np.uint8), target_long=100)
+        raw, low, _cm = _composite_rmse(_fake_psd(big),
+                                        np.zeros((400, 400, 3), dtype=np.uint8), target_long=100)
         self.assertAlmostEqual(raw, 0.0, places=5)
 
     def test_real_psd_composite_runs(self):
@@ -71,7 +94,7 @@ class TestCompositeRealAPI(unittest.TestCase):
         from psd_tools import PSDImage
         psd = PSDImage.open(str(p))
         src = np.zeros((psd.size[1], psd.size[0], 3), dtype=np.uint8)
-        raw, low = _composite_rmse(psd, src, target_long=200)
+        raw, low, _cm = _composite_rmse(psd, src, target_long=200)
         self.assertIsInstance(raw, float)
         self.assertIsInstance(low, float)
 
