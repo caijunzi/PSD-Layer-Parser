@@ -43,7 +43,9 @@ class SemanticLearner:
         baseline_path: str = "tests/baseline_audit_8d.json",
         reject_penalty: float = 0.8,
         accept_boost: float = 1.1,
-        regression_threshold: float = 0.05
+        regression_threshold: float = 0.05,
+        weight_floor: float = 0.05,
+        weight_ceiling: float = 5.0,
     ):
         """
         初始化学习器。
@@ -53,11 +55,19 @@ class SemanticLearner:
             reject_penalty: reject 时的降权因子（默认 0.8，即降权 20%）
             accept_boost: accept 时的升权因子（默认 1.1，即升权 10%）
             regression_threshold: 回归测试阈值（默认 5%）
+            weight_floor: 权重下限（默认 0.05，防止指数衰减到 0）
+            weight_ceiling: 权重上限（默认 5.0，防止指数放大失控）
         """
         self.baseline_path = baseline_path
         self.reject_penalty = reject_penalty
         self.accept_boost = accept_boost
         self.regression_threshold = regression_threshold
+        self.weight_floor = weight_floor
+        self.weight_ceiling = weight_ceiling
+
+    def _clamp(self, weight: float) -> float:
+        """把权重限制在 [floor, ceiling]，避免指数更新溢出。"""
+        return max(self.weight_floor, min(self.weight_ceiling, weight))
     
     def learn_from_episode(
         self,
@@ -108,7 +118,8 @@ class SemanticLearner:
                 n_total_reject = n_quality_reject + n_diffuse_reject
                 
                 # 贝叶斯权重更新：reject 降权，accept 升权
-                # 当前简化实现：假设初始权重为 1.0
+                # 基线权重取 1.0（DB 中 seed prompt 初始权重即 1.0）；
+                # 结果 clamp 到 [weight_floor, weight_ceiling]，防止指数衰减到 0 或放大失控。
                 old_weight = 1.0
                 new_weight = old_weight
                 
@@ -125,6 +136,8 @@ class SemanticLearner:
                 else:
                     continue
                 
+                new_weight = self._clamp(new_weight)
+
                 weight_adjustments[category_id][prompt] = {
                     "old_weight": old_weight,
                     "new_weight": new_weight,
@@ -194,9 +207,10 @@ class SemanticLearner:
                             "n_reject": 0
                         }
                     else:
-                        # 累乘权重调整
-                        aggregated[category_id][prompt]["new_weight"] *= (
-                            adjustment["new_weight"] / adjustment["old_weight"]
+                        # 累乘权重调整（并 clamp，防止跨 episode 累积溢出）
+                        aggregated[category_id][prompt]["new_weight"] = self._clamp(
+                            aggregated[category_id][prompt]["new_weight"]
+                            * (adjustment["new_weight"] / adjustment["old_weight"])
                         )
                     
                     # 统计 accept/reject 次数

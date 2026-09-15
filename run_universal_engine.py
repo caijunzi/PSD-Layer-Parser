@@ -34,21 +34,48 @@ from engine.tiled_super_res import UniversalTiledSuperRes
 from engine.psb_builder import UniversalPSBBuilder
 from concurrent.futures import ThreadPoolExecutor
 
+def _build_operator_ctx(src_lr, preset=None):
+    """构造算子用 ProcessingContext，落实铁律 R2（检测/输出双分支）。
+
+    - detect_image：经照度平场（LightingManager），**只服务检测**（轮廓/微孔/接缝）；
+    - output_image：原始未平场像素（供输出/比色）。
+    此前 lighting.py 零调用 → R2 的"平场检测分支"在代码中是空承诺，现接线。
+    """
+    from engine.core.models import ProcessingContext
+
+    ctx = ProcessingContext(source_bgr=src_lr)
+    ctx.output_image = src_lr
+    try:
+        from engine.core.lighting import LightingManager
+
+        flat = LightingManager.normalize_illumination(
+            src_lr, target_mean=float((preset or {}).get("flatfield_target_mean", 230.0))
+        )
+        ctx.detect_image = flat if flat is not None else src_lr
+    except Exception as e:
+        print(f"  -> [R2] 照度平场不可用，detect 分支回退原图: {e}")
+        ctx.detect_image = src_lr
+    return ctx
+
+
 def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
-    """PLATE 线印前算子链：轮廓保全 / 微孔刀模 / 专色陷印。
+    """PLATE 线印前算子链：轮廓保全 / 微孔刀模 / 专色陷印 / 金属分色。
 
     对应 ADR-008（裁切线运行时化）/ ADR-017（陷印）/ 铁律 R4、R5。
-    三个算子均为**品类可选**：由 preset 的 plate_operators 开关控制，
+    算子均为**品类可选**：由 preset 的 plate_operators 开关控制，
     未启用的算子如实记录 skipped，不伪造结果。
 
     返回 (operators_summary, extra_layers)：
       operators_summary: 写入 manifest 的逐算子结果
-      extra_layers: 需并入分层流程的新图层（刀模层 / 专色层）
+      extra_layers: 需并入分层流程的新图层（刀模层 / 专色层 / 金属分色层）
     """
-    from engine.operators.base import OperatorResult
     from engine.operators.contour_protection import ContourProtectionOperator
     from engine.operators.micro_holes import MicroHolesOperator
     from engine.operators.trapping import TrappingOperator
+    from engine.operators.metallic_foil import MetallicFoilOperator
+
+    # R2：算子的检测分支取 detect_image（经照度平场），不被写回输出像素
+    op_ctx = _build_operator_ctx(src_lr, preset)
 
     cfg = preset.get("plate_operators", {}) or {}
     summary: dict[str, Any] = {}
@@ -57,7 +84,7 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     # 1) 轮廓保全：运行时计算安全裁切下限（ADR-008，替代历史硬编码 Y=718）
     c_cfg = cfg.get("contour_protection", {})
     if c_cfg.get("enabled", True):
-        res = ContourProtectionOperator().run(src_lr, params=c_cfg.get("params"))
+        res = ContourProtectionOperator().run(op_ctx, params=c_cfg.get("params"))
         if res.success:
             summary["contour_protection"] = {
                 "status": "ok",
@@ -72,7 +99,7 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
     # 2) 微孔刀模（铁律 R5：仅在有效基材掩模内检测）
     m_cfg = cfg.get("micro_holes", {})
     if m_cfg.get("enabled", False):
-        res = MicroHolesOperator().run(src_lr, params={
+        res = MicroHolesOperator().run(op_ctx, params={
             **(m_cfg.get("params") or {}),
             "target_size": (src_lr.shape[1], src_lr.shape[0]),
         })
@@ -132,6 +159,43 @@ def _run_plate_operators(src_lr, sorted_layers, preset, ppi):
             "status": "disabled" if not t_cfg.get("enabled", False) else "skipped",
             **({"reason": "未配置 spot_layer_name"} if t_cfg.get("enabled", False) else {}),
         }
+
+    # 4) 金属分色（金属箔/烫金工艺）：把铜箔与金地分成两张专色掩模层
+    #    品类可选：需显式提供 valid_print_mask 语义（否则在有效印刷区外误判）
+    foil_cfg = cfg.get("metallic_foil", {})
+    if foil_cfg.get("enabled", False):
+        valid_mask = None
+        vm_name = foil_cfg.get("valid_mask_layer")
+        if vm_name:
+            valid_mask = next((l["mask"] for l in sorted_layers
+                               if l["name"] == vm_name and l.get("mask") is not None), None)
+        if valid_mask is None:
+            # 回退：用内容层掩模并集作为有效印刷区
+            valid_mask = np.zeros(src_lr.shape[:2], dtype=np.uint8)
+            for l in sorted_layers:
+                if l.get("mask") is not None:
+                    valid_mask = cv2.bitwise_or(valid_mask, l["mask"])
+        res = MetallicFoilOperator().run(op_ctx, params={
+            "valid_print_mask": valid_mask,
+            **(foil_cfg.get("params") or {}),
+        })
+        if res.success:
+            for key, ly_name, z in (
+                ("copper_mask", foil_cfg.get("copper_layer_name", "13A_玫瑰铜箔专色_Foil_Copper"), 106.0),
+                ("gold_mask", foil_cfg.get("gold_layer_name", "13B_复古金专色_Foil_Gold"), 106.5),
+            ):
+                m = res.data.get(key)
+                if m is not None and np.count_nonzero(m) > 0:
+                    extra_layers.append({
+                        "name": ly_name, "mask": m,
+                        "blend_mode": "NORMAL", "opacity": 255, "z_index": z,
+                    })
+            summary["metallic_foil"] = {"status": "ok",
+                                        **{k: v for k, v in res.metrics.items()}}
+        else:
+            summary["metallic_foil"] = {"status": "skipped", "reason": res.message}
+    else:
+        summary["metallic_foil"] = {"status": "disabled"}
 
     return summary, extra_layers
 
@@ -296,6 +360,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                     selected_db,
                     adaptive_mode,
                     db=db_mgr,
+                    preset_full=preset,
                 )
 
                 # 6. Stage 5.2 主动学习：把不确定类目（confidence < 0.7）写入待审队列
@@ -383,6 +448,29 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
 
     h_lr, w_lr, _ = src_lr.shape
     print(f"[Engine] Source Resolution: {w_lr} x {h_lr}")
+
+    # -------------------------------------------------------------
+    # Step 0（可选）：接缝流场对齐（铁律 R3：禁止裸 vstack / hstack 硬拼）
+    #   仅当 preset 显式开启 seam_harmonization 时执行（循环花纹/拼接品类，如壁布）。
+    #   注意：此步会改写用于下游分层的源图（改变输出），未开启则完全不影响。
+    # -------------------------------------------------------------
+    _seam_cfg = preset.get("seam_harmonization") or {}
+    if _seam_cfg.get("enabled", False):
+        try:
+            from engine.operators.seam_harmonizer import SeamHarmonizerOperator
+
+            _seam_res = SeamHarmonizerOperator().run(
+                _build_operator_ctx(src_lr, preset), params=_seam_cfg.get("params")
+            )
+            if _seam_res.success and _seam_res.data.get("harmonized_image") is not None:
+                src_lr = _seam_res.data["harmonized_image"]
+                print(f"  -> [R3] 接缝流场对齐完成: "
+                      f"pre_rmse={_seam_res.metrics.get('pre_seam_rmse')} → "
+                      f"post_rmse={_seam_res.metrics.get('post_seam_rmse')}")
+            else:
+                print(f"  -> [R3] 接缝对齐跳过: {_seam_res.message}")
+        except Exception as _e:
+            print(f"  -> [R3] 接缝对齐失败（不影响主流程）: {_e}")
 
     # Determine target resolution
     out_w, out_h = resolve_output_size(w_lr, h_lr, target_scale, target_w, target_h, preset)

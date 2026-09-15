@@ -41,6 +41,7 @@ def archive_episode(
     episode_path: str = DEFAULT_EPISODE_PATH,
     update_index: bool = True,
     audit_8d: Optional[Dict[str, Any]] = None,
+    auto_tune: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     归档一次自适应语义交互。
@@ -56,18 +57,33 @@ def archive_episode(
         episode_path:   episode 日志路径（默认 webui/data/adaptive_episodes.jsonl）
         update_index:   是否更新 CBR 指纹索引（Stage 4，默认 True）
         audit_8d:       审计 8 维数据（用于判断 audit_passed，可选）
+        auto_tune:      本次图级 Auto-Tune 参数（供 CBR 复用，可选）
 
     Returns:
         episode id（形如 ep_20260913T..._a1b2c3d4e5f6）
     """
     ts = datetime.now(timezone.utc).isoformat()
 
-    # 指纹只保留摘要（embedding 128 维不入库，避免每条数 KB）
+    # 指纹摘要 + 128 维 embedding（embedding 用于 CBR 索引延后重建；128 float ≈ 1KB/条）
     fp_summary = None
+    embedding = None
     if fingerprint:
         fp_summary = {
             "image_shape": fingerprint.get("image_shape"),
             "affinity_top": None,  # 由调用方按需填充
+        }
+        _emb = fingerprint.get("embedding")
+        if _emb is not None and len(_emb) == 128:
+            embedding = [round(float(x), 6) for x in _emb]
+
+    # 审计摘要：只保留可用于回归判定与 CBR 门槛的关键字段
+    audit_summary = None
+    if audit_8d:
+        audit_summary = {
+            "lost_ratio": audit_8d.get("lost_ratio"),
+            "rmse_lowfreq": audit_8d.get("rmse_lowfreq"),
+            "plate_purity_ok": audit_8d.get("plate_purity_ok"),
+            "n_layers": audit_8d.get("n_layers"),
         }
 
     record = {
@@ -80,6 +96,9 @@ def archive_episode(
         "confidence": float(confidence),
         "image_path": image_path,
         "fingerprint_summary": fp_summary,
+        "embedding": embedding,
+        "audit_8d": audit_summary,
+        "auto_tune": auto_tune or {},
         "notes": notes,
     }
 
@@ -156,3 +175,132 @@ def load_episodes(
 
     out.reverse()  # 最近在前
     return out[:limit]
+
+
+def load_episode_by_id(
+    episode_id: str,
+    episode_path: str = DEFAULT_EPISODE_PATH,
+) -> Optional[Dict[str, Any]]:
+    """按 episode_id 从 JSONL 日志中读取单条记录（供 CBR 检索复用参数）。
+
+    这是与 archive_episode 对称的读取入口：archive 写 JSONL，CBR 按 episode_id 回读，
+    修复此前"归档写 JSONL、检索找 episodes/**/*.episode.json"的格式断裂。
+
+    Args:
+        episode_id: archive_episode 返回的 episode id
+        episode_path: episode 日志路径
+
+    Returns:
+        episode 记录字典，未找到返回 None
+    """
+    path = Path(episode_path)
+    if not path.exists():
+        return None
+
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("episode_id") == episode_id:
+                return rec
+    return None
+
+
+def update_episode_audit(
+    episode_id: str,
+    audit_8d: Dict[str, Any],
+    episode_path: str = DEFAULT_EPISODE_PATH,
+) -> bool:
+    """回填某 episode 的审计 8 维结果（审计在出图之后才产生，故需事后回填）。
+
+    修复（2026-09-15）：引擎归档发生在分割/超分之前，此时审计尚不存在，
+    导致 archive 时 audit_passed 恒为 False、CBR 索引筛空。本函数让审计完成后
+    由 WebUI 侧回填，并配合 sync_index_from_log 重建索引。
+
+    Args:
+        episode_id: episode id
+        audit_8d: 审计 8 维数据（lost_ratio / rmse_lowfreq / plate_purity_ok / n_layers）
+        episode_path: JSONL 日志路径
+
+    Returns:
+        是否找到并更新
+    """
+    path = Path(episode_path)
+    if not path.exists():
+        return False
+
+    found = False
+    records: List[Dict[str, Any]] = []
+    with _lock:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("episode_id") == episode_id:
+                    rec["audit_8d"] = {
+                        "lost_ratio": audit_8d.get("lost_ratio"),
+                        "rmse_lowfreq": audit_8d.get("rmse_lowfreq"),
+                        "plate_purity_ok": audit_8d.get("plate_purity_ok"),
+                        "n_layers": audit_8d.get("n_layers"),
+                    }
+                    found = True
+                records.append(rec)
+
+        if found:
+            with path.open("w", encoding="utf-8") as f:
+                for rec in records:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return found
+
+
+def sync_index_from_log(
+    episode_path: str = DEFAULT_EPISODE_PATH,
+) -> int:
+    """从 JSONL 日志重建 CBR 指纹索引（用记录中的 embedding + audit_8d 判定 audit_passed）。
+
+    这是"审计回填后再刷新索引"的收口函数：archive 时审计未知 → 审计完成后
+    update_episode_audit 回填 → 本函数重建索引，使 audit_passed 反映真实审计结果。
+
+    Returns:
+        本次写入索引的 episode 数量
+    """
+    import numpy as np
+    from .episode_indexer import get_default_indexer
+
+    path = Path(episode_path)
+    if not path.exists():
+        return 0
+
+    indexer = get_default_indexer()
+    n = 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            emb = rec.get("embedding")
+            if not emb or len(emb) != 128:
+                continue
+            audit = rec.get("audit_8d") or {}
+            lost = audit.get("lost_ratio")
+            audit_passed = bool(lost is not None and float(lost) < 0.05)
+            indexer.add(rec.get("episode_id"), np.array(emb, dtype=np.float32), audit_passed)
+            n += 1
+
+    if n:
+        indexer.save()
+    return n

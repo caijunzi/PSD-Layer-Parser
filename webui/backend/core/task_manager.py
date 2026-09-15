@@ -8,7 +8,9 @@
 """
 import asyncio
 import json
+import os
 import re
+import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +21,24 @@ from core.file_handler import (
     UPLOADS_DIR, OUTPUTS_DIR, ENGINE_ENTRY, append_history,
 )
 
-# 本机 Python 解释器（绕开 WorkBuddy bash shim 的坏 PATH）
-PYTHON_BIN = r"C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe"
+
+def _resolve_python_bin() -> str:
+    """解析引擎解释器：环境变量 ULS_PYTHON_BIN > 当前解释器 > 历史硬编码兜底。
+
+    修复（2026-09-15）：此前硬编码本机绝对路径，换机器/换解释器即失效。
+    优先级保证：显式配置可控、默认用运行本进程的解释器（最可能装齐依赖）、
+    最终兜底历史路径以免行为突变。
+    """
+    env_bin = os.environ.get("ULS_PYTHON_BIN")
+    if env_bin and os.path.isfile(env_bin):
+        return env_bin
+    if sys.executable and os.path.isfile(sys.executable):
+        return sys.executable
+    return r"C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe"
+
+
+# 引擎 Python 解释器（可经环境变量 ULS_PYTHON_BIN 覆盖）
+PYTHON_BIN = _resolve_python_bin()
 
 # preset → 预估耗时（秒），用于进度条与 UI 提示
 PRESET_ESTIMATE = {
@@ -278,6 +296,13 @@ class TaskManager:
             )
             (out_dir / "result.audit.json").write_text(
                 json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            # 审计完成后：回填审计结果到 episode 并重建 CBR 索引。
+            # 修复（2026-09-15）：引擎归档发生在审计之前（审计此时尚不存在），
+            # 导致 episode 的 audit_passed 恒为 False、CBR 检索永远筛空。
+            # 此处从任务日志里取 episode_id（引擎归档时打印），回填后重建索引。
+            self._backfill_episode_audit(task_id, out_dir)
+
             if isinstance(res, dict):
                 res = dict(res)
                 res["has_report"] = True
@@ -297,6 +322,43 @@ class TaskManager:
                 })
             except Exception:
                 pass
+
+    def _backfill_episode_audit(self, task_id: str, out_dir: Path) -> None:
+        """把本次任务的审计 8 维回填到对应 episode，并重建 CBR 指纹索引。
+
+        全程 try 包裹：CBR 属旁路能力，失败不得影响任务与产物。
+        """
+        try:
+            task = self.tasks.get(task_id) or {}
+            ep_id = None
+            for lg in reversed(task.get("logs", [])):
+                m = re.search(r"episode 已归档:\s*(\S+)", lg.get("message", ""))
+                if m:
+                    ep_id = m.group(1)
+                    break
+            if not ep_id:
+                return
+
+            import sys as _sys
+            _root = Path(__file__).resolve().parents[3]
+            if str(_root) not in _sys.path:
+                _sys.path.insert(0, str(_root))
+
+            from engine.adaptive.episode_archiver import (
+                update_episode_audit,
+                sync_index_from_log,
+            )
+            from engine.adaptive.regression_tester import extract_audit_8d
+
+            audit_json = out_dir / "result.audit.json"
+            if not audit_json.is_file():
+                return
+            audit_8d = extract_audit_8d(str(audit_json))
+            if update_episode_audit(ep_id, audit_8d):
+                n = sync_index_from_log()
+                print(f"[TaskManager] CBR 索引已按真实审计重建：{n} 条（episode={ep_id}）")
+        except Exception as e:  # 旁路失败静默
+            print(f"[TaskManager] 审计回填 episode 失败（不影响任务）: {e}")
 
     def _resolve_input(self, file_id: str) -> Optional[Path]:
         """根据 file_id 找上传文件（扩展名未知，glob）。"""

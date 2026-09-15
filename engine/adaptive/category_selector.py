@@ -245,21 +245,37 @@ def merge_into_preset_format(
     preset_classes: List[Dict[str, Any]],
     selected_db: List[Dict[str, Any]],
     mode: str,
-    db: Optional[DBManager] = None
+    db: Optional[DBManager] = None,
+    min_affinity: float = 0.6,
+    max_supplement: int = 3,
+    preset_full: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     将 DB 选出的类目合并进 preset 的 ai_semantic_classes（保持 preset 为 SSOT）。
 
     - mode="auto":   用 DB 类目整体替换（preset 视为未配置自适应类目）
     - mode="hybrid": 保留 preset 原有类目（含 region/instance_split/blob_instances 等
-                      元数据），仅补充 DB 中未覆盖的类目（按 name_zh 子串去重）
+                      元数据），仅**限量**补充 DB 中未覆盖的类目（按 name_zh 子串去重）
     - mode="locked": 调用方不应进入此函数（默认不启用自适应，preset 原样保留）
+
+    hybrid 护栏（2026-09-15，端到端实测后加固）：
+      ① 去重在**别名解析之后**进行（比对最终落盘名，而非 name_zh）；
+      ② 英文词元重叠视为语义重复（*_cliffs / *_trees / *_brocade_outer_frame…）；
+      ③ 提供 preset_full 时，去重语料扩展到**整个 preset 文本**，覆盖 10A/10B
+         等不在 ai_semantic_classes 中的支撑/装饰层；
+      ④ 亲和度门槛 min_affinity + 数量上限 max_supplement。
+    实测教训：未加固前 hybrid 曾把 10 个词库泛类灌入旗舰 preset
+    （其中 calligraphy/brocade_frame 与 preset 已有层重复），DINO 提示词翻倍、
+    Step1 从 ~102s 涨到 225s。
 
     Args:
         preset_classes: 原始 preset ai_semantic_classes（list of dict）
         selected_db:    select_categories(..., mode="auto") 返回的 DB 类目
         mode:           "auto" / "hybrid"
         db:             DBManager 实例（用于查询 preset 别名）
+        min_affinity:   hybrid 补充类目的最低亲和度门槛
+        max_supplement: hybrid 最多补充的类目数
+        preset_full:    完整 preset dict（把去重语料扩展到全部图层名/映射）
 
     Returns:
         list of dict（preset 格式：至少含 name / prompt）
@@ -267,12 +283,68 @@ def merge_into_preset_format(
     if mode == "auto":
         return [db_category_to_preset_class(c, db) for c in selected_db]
 
-    # hybrid：保留 preset，补充未覆盖的 DB 类目
+    # hybrid：保留 preset，限量补充未覆盖的高亲和度 DB 类目
     preset_names_lower = [(pc.get("name") or "").lower() for pc in preset_classes]
+    preset_tokens: set = set()
+    for pn in preset_names_lower:
+        preset_tokens |= _english_tokens(pn)
+    # 去重语料扩展到整个 preset 文本（覆盖 10A/10B 等支撑/装饰层）
+    corpus_lower = ""
+    if preset_full:
+        import json as _json
+
+        corpus_lower = _json.dumps(preset_full, ensure_ascii=False).lower()
+        preset_tokens |= _english_tokens(corpus_lower)
+
     result = list(preset_classes)
+    supplemented = 0
     for c in selected_db:
+        # 先把 DB 类目解析成 preset 命名（含别名表），再做去重——
+        # 修复（2026-09-15）：原实现用 name_zh 去重，但最终落盘名来自别名表，
+        # 导致别名与 preset 同名的类目（如 calligraphy→"题跋落款墨书_Calligraphy_Inscription"
+        # 与 preset 09B 同名）漏网，注入重复层。
+        resolved = db_category_to_preset_class(c, db)
+        rname = (resolved.get("name") or "").lower()
         nz = (c.get("name_zh") or "").lower()
-        if nz and any(nz in pn for pn in preset_names_lower):
+
+        duplicate = bool(rname and corpus_lower and rname in corpus_lower)
+        if not duplicate:
+            for pn in preset_names_lower:
+                if not pn:
+                    continue
+                if rname and (rname in pn or pn in rname):
+                    duplicate = True
+                    break
+                if nz and nz in pn:
+                    duplicate = True
+                    break
+        # 英文词元重叠（如同为 *_cliffs / *_trees）：视为语义重复，跳过
+        if not duplicate and (preset_tokens & _english_tokens(rname)):
+            duplicate = True
+        if duplicate:
             continue  # 已被 preset 覆盖，跳过避免重复检测
-        result.append(db_category_to_preset_class(c, db))
+
+        aff = c.get("affinity")
+        if aff is not None and float(aff) < min_affinity:
+            continue  # 亲和不达标（仅在亲和度已知时过滤），不补充
+        if supplemented >= max_supplement:
+            break
+        result.append(resolved)
+        supplemented += 1
     return result
+
+
+def _english_tokens(name: str) -> set:
+    """提取名称中的英文词元（去掉序号与中文），用于语义去重。
+
+    例："04a_前景墨岩峭壁_foreground_dark_cliffs" → {"foreground","dark","cliffs"}
+        "山石崖壁_mountains_cliffs"               → {"mountains","cliffs"}
+    """
+    import re as _re
+
+    tokens = set()
+    for seg in _re.findall(r"[A-Za-z_]{3,}", str(name).lower()):
+        for t in seg.split("_"):
+            if len(t) >= 4:
+                tokens.add(t)
+    return tokens

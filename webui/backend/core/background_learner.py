@@ -16,6 +16,7 @@
 
 import json
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -274,14 +275,49 @@ class BackgroundLearner:
         
         return tasks[:limit]
 
+    # ---------------- 后台消费者（修复：此前 task_queue 无消费者，任务永不执行） ----------------
+
+    def drain_once(self) -> Optional[str]:
+        """从队列取出一个任务并执行；队列空返回 None（供测试同步调用）。"""
+        with self.task_lock:
+            if not self.task_queue:
+                return None
+            item = self.task_queue.popleft()
+        self.process_learning_task(item["episode_id"])
+        return item["episode_id"]
+
+    def start_worker(self, poll_interval: float = 1.0) -> threading.Thread:
+        """启动后台守护线程消费学习任务队列（幂等）。
+
+        修复（2026-09-15）：enqueue_learning_task 只入队，从未有消费者，
+        导致学习任务永远停在 queued。此处补上守护线程。
+        """
+        if getattr(self, "_worker", None) is not None:
+            return self._worker
+
+        def _loop():
+            while True:
+                try:
+                    processed = self.drain_once()
+                except Exception as e:  # 单任务异常不应杀死 worker
+                    print(f"[BackgroundLearner] worker 处理异常: {e}")
+                    processed = None
+                if processed is None:
+                    time.sleep(poll_interval)
+
+        self._worker = threading.Thread(target=_loop, name="bg-learner", daemon=True)
+        self._worker.start()
+        return self._worker
+
 
 # 全局单例（便于 API 路由调用）
 _background_learner: Optional[BackgroundLearner] = None
 
 
 def get_background_learner() -> BackgroundLearner:
-    """获取全局后台学习器实例（单例）"""
+    """获取全局后台学习器实例（单例），并确保后台消费线程已启动。"""
     global _background_learner
     if _background_learner is None:
         _background_learner = BackgroundLearner()
+        _background_learner.start_worker()
     return _background_learner

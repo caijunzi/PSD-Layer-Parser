@@ -2,7 +2,7 @@
 
 > 换账号/换机器时的**唯一入口文档**。新会话第一句：先读 `HANDOFF.md`。
 > 深度细节在 `docs/`；项目日志在 `.workbuddy/memory/`。
-> 最后更新：2026-09-13 18:30 by WorkBuddy AI
+> 最后更新：2026-09-15 11:30 by WorkBuddy AI（P0–P2 修复批次；**请先读 §9**）
 
 ---
 
@@ -81,12 +81,67 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 4. **跨图配置**：region 框仍是构图先验 → 已提供 `tools/calibrate_density_bands.py`
    （直方图推荐参数），配金标准回归防漂移
 5. 前端 vite/后端 8099 为手动启停（用户会自行 kill，勿自动重启）
-6. **自适应语义机制**（`docs/adaptive-semantics/`）：Stage 1（DB/指纹/材质判别/类目选择/episode 归档）
-   + 命名空间桥接（DB 类目 → preset 别名）**已完成**；计划中 **Stage 2（图级 Auto-Tune：region/密度带
-   建议 + 前端采纳卡片）/ Stage 3（反馈闭环+影子进化）/ Stage 4（CBR）/ Stage 5（类目树+主动学习）未做**。
+6. **自适应语义机制**（`docs/adaptive-semantics/`）：**Stage 1–5.3 代码均已落地**，且自 2026-09-15 起
+   **真正启用**（`japanese_screen_gold.json` 顶层 `mode=hybrid` + `auto_evolve=true`；此前因 preset 缺
+   顶层 `mode` 恒 `locked`，Stage 1/2/4 引擎侧从不执行）。启用后 hybrid 会**限量补充**高亲和度 DB 类目
+   （护栏：affinity≥0.6 且 ≤10 条），须重跑金标准与 RK-16 复核。
 7. **品类扩展**：封闭 5 类仅 1 类（金地屏风）端到端验证；壁布/烫印/水墨/油画 4 类改 preset 即可接入但**未验证**。
-8. **未提交改动**：Stage 2 命名空间桥接（category_selector / migration_002 / seed_data_002 / tests / run_universal_engine）。
+8. **提交状态**：2026-09-15 批次改动见 §9；提交前必跑两组全量测试
+   （当前 159 passed / 2 skipped + WebUI 28 OK）。`webui/data/adaptive_semantics.db.bak-20260915`
+   为迁移修复前备份，确认无误后可删。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
+
+## 9. 2026-09-15 P0–P2 修复批次（**最新状态，优先阅读**）
+
+对全仓库逐文件审计后落地的修复，分 A/B/C 三组：
+
+**A 组｜文档对齐**：本文件 §6 与 `README.md` §一/§速度览 已按代码事实更正。
+
+**B 组｜缺陷修复（行为向设计意图收敛，测试全绿）**
+| 项 | 文件 | 内容 |
+|---|---|---|
+| ④ CBR 格式统一 | `engine/adaptive/{cbr_retriever,episode_archiver}.py` | 归档写 JSONL 而检索找 `episodes/**/*.episode.json` → 现双通道；归档存 embedding + `auto_tune`；新增 `load_episode_by_id` |
+| ⑤ 迁移自环 | `migrations/migration_003_build_tree.py` | `architecture` 二级/三级同名致 `parent_id=self` → 跳过自环 + 数据修复；改用 `rowcount` 杜绝"假成功"日志 |
+| ⑥ 主动学习字段错配 | `engine/adaptive/active_learner.py` | 兼容 `dino_detections`（`layer_name`/`logits`/`boxes`），修复"全部检出被判不确定" |
+| ⑦ 掩码落盘空壳 | `engine/schemas/manifest.py` | `save(mask_dir)` 真正写掩码 PNG + 回填 `recon_mask_path`（relpath）；新增 `attach_recon_mask` |
+| ⑩ 先验继承 | `engine/adaptive/category_tree.py` | `inherit_priors` 由 `NotImplementedError` 改为优雅跳过 + 有数据时复制；`get_ancestors` 加防环 |
+| ⑭ 学习权重 | `engine/adaptive/learner.py` | 权重 clamp 到 `[0.05, 5.0]`，跨 episode 累乘亦 clamp |
+| ⑮ 回归维度 | `engine/adaptive/regression_tester.py` | 名义 8 维实判 3 维 → 实判 4 恶化型 + 层数 + 纯净性；消除除零 |
+| ⑯ DB 版本 | `engine/adaptive/db_manager.py` | 新增 `create_version()`（此前版本链无创建入口） |
+| ⑪ `--scale` 优先级 | `run_universal_engine.resolve_output_size` | 核实：**代码已修**（CLI > preset），仅文档滞后 |
+| ⑫ 解释器路径 | `webui/backend/core/task_manager.py` | `PYTHON_BIN` 改为 env `ULS_PYTHON_BIN` > 当前解释器 > 兜底 |
+| ⑱ IO 扩展名 | `engine/core/io_utils.py` | 未知扩展名不再回落 jpg，改默认 PNG（无损） |
+| ③ 写盘内存 | `engine/codecs_accelerator.py` | 核实：**早已分块流式**（CHUNK_ROWS=256），无需再改 |
+
+**C 组｜架构/行为变更（改变 PSB 输出，须复核）**
+| 项 | 内容 |
+|---|---|
+| ① 自适应启用 | `japanese_screen_gold.json` 加顶层 `mode=hybrid`/`auto_evolve`；`merge_into_preset_format` 加"限量补充"护栏 |
+| ⑧ R2 平场接线 | 新增 `_build_operator_ctx()`：`detect_image` 走 `LightingManager.normalize_illumination`，算子的检测分支取平场图 |
+| ⑨ R3/金属接线 | `seam_harmonizer` 作可选前置步（preset `seam_harmonization.enabled`）；`metallic_foil` 作可选印前算子（preset `plate_operators.metallic_foil.enabled`）|
+| ⑬ 后台学习接线 | `background_learner` 增守护线程消费队列；注册 `POST /api/adaptive/trigger-learning` 与 `GET /api/adaptive/learning-status` |
+| ⑰ preset 校验 | 新增 `engine/schemas/preset_schema.py`，`load_preset` 非破坏校验（默认告警，`ULS_PRESET_STRICT=1` 升级为错误）|
+| 审计回填 | `task_manager._backfill_episode_audit()`：审计完成后回填 episode 的 `audit_8d` 并重建 CBR 索引 |
+
+**端到端实测（2026-09-15，本机 --mode both）**：PLATE 474.5s/1.80GB/43 层、DESIGN 399.9s/1.53GB/43 层。
+①⑧⑨ 全部验证生效（`plate_purity_ok=true`、TAC 300%、有效源 37.5 PPI）。发现 hybrid 曾灌入 10 个泛类
+（含与 preset 重复者），已加固为"解析后名称 + 英文词元 + 全 preset 语料"三重去重 + `max_supplement=3`。
+
+**A 方案：材质分类器金地判据修复**（`fingerprint.py` / `material_classifier.py`）
+- 根因：指纹的"背景"取自外框 10%，而扫描件外框是博物馆灰底（实测 L37/b0），画心才是金地（L79/b38）。
+- 修复：指纹新增 `center_median_LAB` / `center_saturation`（去外框 15%，不改 embedding 维度）；
+  **仅金地规则**改用中心区（以 b\* 黄度为主），其余三族保持原口径。
+- 验证：source_4000.jpg 由 `油画布 0.55` → **`金地屏风 1.00`**；其它图判定不变；
+  金地家族下 hybrid 仅补充 **3 个**（修复痕迹/梅花/竹）。
+- 新增回归：`tests/test_material_classifier.py`（7 例）。引擎 **166 passed / 2 skipped**。
+
+**追加项：宣纸水墨 / 绢本工笔 亦切中心区并单独标定**
+- 区分点 = 笔触密度/纹理能量：宣纸水墨 cL>60、cb<20、edge<0.16、glcm<0.28（稀疏写意）；
+  绢本工笔 cb 10–30、65<cL<88、edge≥0.16 或 glcm≥0.28（细腻密集）。
+- 实测：写意水墨山水 → **宣纸水墨 0.65**（原误判绢本 0.70）；织物 → 绢本工笔 1.00；金地图仍 1.00。
+- 油画布仍保留原外框口径（未标定）。⚠️ 无绢本真值样本，绢本阈值属保守估计。
+
+**测试**：引擎 166 passed / 2 skipped；WebUI 28 OK；迁移 003 在真实库执行成功（残留自环 0）。
 
 ## 7. 常用命令
 
@@ -95,8 +150,8 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试
-python -m unittest discover -s tests -p 'test_*.py'          # 引擎 64
-python -m unittest discover -s webui/backend/tests -p 'test_*.py'  # WebUI 28
+python -m unittest discover -s tests -p 'test_*.py'          # 引擎 159 passed / 2 skipped（py -m pytest tests/ -q 亦可）
+python -m unittest discover -s webui/backend/tests -p 'test_*.py'  # WebUI 28 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg

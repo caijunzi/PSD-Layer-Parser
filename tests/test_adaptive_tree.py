@@ -171,7 +171,7 @@ class TestCategoryTreeAncestors(unittest.TestCase):
 
 
 class TestCategoryTreeInheritPriors(unittest.TestCase):
-    """测试 inherit_priors 骨架（当前标记 TODO）"""
+    """测试 inherit_priors（priors 表为空时优雅跳过）"""
     
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -211,20 +211,68 @@ class TestCategoryTreeInheritPriors(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
     
-    def test_inherit_priors_raises_not_implemented(self):
-        """inherit_priors 当前应抛出 NotImplementedError（标记 TODO）"""
-        with self.assertRaises(NotImplementedError) as cm:
-            self.tree.inherit_priors("child", "parent")
-        
-        # 验证错误消息包含关键信息
-        err_msg = str(cm.exception)
-        self.assertIn("inherit_priors", err_msg)
-        self.assertIn("category_priors", err_msg.lower())
-        # 验证包含"跳过"/"TODO"/"待"等标记词（中文或英文皆可）
+    def test_inherit_priors_graceful_when_no_priors(self):
+        """priors 表不存在 / 无先验数据时应优雅跳过（返回状态字典），不抛异常"""
+        result = self.tree.inherit_priors("child", "parent")
+
+        self.assertIsInstance(result, dict)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["inherited"])
+        # 说明原因应包含"跳过"/"无先验"等信息
+        reason = result["reason"].lower()
         self.assertTrue(
-            any(keyword in err_msg for keyword in ["跳过", "TODO", "待", "skip", "pending"]),
-            f"错误消息应包含跳过/TODO标记，实际为：{err_msg}"
+            any(keyword in reason for keyword in ["跳过", "无先验", "skip", "不存在", "category_priors"]),
+            f"跳过原因应可读，实际为：{result['reason']}"
         )
+
+    def test_inherit_priors_copies_when_prior_exists(self):
+        """父类目存在先验时应复制到子类目（n_samples=0 标记继承来源）"""
+        conn = sqlite3.connect(self.db_path)
+        now = int(datetime.now(timezone.utc).timestamp())
+        conn.execute(
+            """
+            CREATE TABLE category_priors (
+                category_id TEXT PRIMARY KEY,
+                area_budget_min REAL, area_budget_max REAL,
+                elongation_mean REAL, elongation_std REAL,
+                compactness_mean REAL, compactness_std REAL,
+                n_components_mode INTEGER, n_samples INTEGER DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO category_priors (category_id, area_budget_min, area_budget_max, "
+            "elongation_mean, elongation_std, compactness_mean, compactness_std, "
+            "n_components_mode, n_samples, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ("parent", 0.01, 0.2, 1.5, 0.3, 0.6, 0.1, 2, 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        result = self.tree.inherit_priors("child", "parent")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["inherited"])
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT area_budget_min, area_budget_max, n_samples FROM category_priors WHERE category_id = ?",
+            ("child",),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row[0], 0.01)
+        self.assertEqual(row[1], 0.2)
+        self.assertEqual(row[2], 0)  # 继承来源标记
+
+    def test_get_ancestors_cycle_guard(self):
+        """祖先链存在自环时应截断而非死循环"""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE categories SET parent_id = ? WHERE id = ?", ("child", "child"))
+        conn.commit()
+        conn.close()
+
+        ancestors = self.tree.get_ancestors("child")  # 不应挂死
+        self.assertIsInstance(ancestors, list)
 
 
 if __name__ == "__main__":

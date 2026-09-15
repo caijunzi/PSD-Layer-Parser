@@ -135,16 +135,49 @@ class DeliverableManifest:
     manifest_version: str = MANIFEST_VERSION
     created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
 
+    def __post_init__(self) -> None:
+        # 重建掩码像素体积巨大，不进入 JSON（asdict 不应包含），
+        # 仅作为普通属性挂在实例上，由 save() 落盘为独立 PNG。
+        if not hasattr(self, "_recon_masks"):
+            self._recon_masks: dict[str, np.ndarray] = {}
+
     # ---------------- 写入 ----------------
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def attach_recon_mask(self, name: str, mask: Optional[np.ndarray]) -> None:
+        """挂载某层的重建掩码（内存态），并同步更新该层记录的尺寸/像素数/占比。"""
+        if mask is None:
+            return
+        m = np.asarray(mask)
+        self._recon_masks[name] = m
+        rec = self.layer(name)
+        if rec is not None:
+            rec.recon_mask_size = (int(m.shape[1]), int(m.shape[0]))
+            rec.recon_pixel_count = int((m > 0).sum())
+            total = int(m.shape[0]) * int(m.shape[1])
+            rec.recon_ratio = round(rec.recon_pixel_count / total, 6) if total else 0.0
+
     def save(self, manifest_path: str, mask_dir: Optional[str] = None) -> str:
-        """写出 manifest；若给定 mask_dir 则同时把各层掩码落盘为 PNG。"""
-        if mask_dir:
-            os.makedirs(mask_dir, exist_ok=True)
+        """写出 manifest；若给定 mask_dir 则把各层重建掩码实际落盘为 PNG。
+
+        修复（2026-09-15）：此前 save(mask_dir) 只 makedirs、从不写掩码，
+        导致 R1「重建区必须可追溯」在落盘处断链——记录了 recon 但 PNG 不存在。
+        recon_mask_path 为**相对 manifest 所在目录**的路径，跨调用方通用。
+        """
         out_dir = os.path.dirname(os.path.abspath(manifest_path))
         os.makedirs(out_dir, exist_ok=True)
+        if mask_dir:
+            os.makedirs(mask_dir, exist_ok=True)
+            for name, mask in getattr(self, "_recon_masks", {}).items():
+                if mask is None:
+                    continue
+                fname = _safe_mask_filename(name)
+                full = os.path.join(mask_dir, fname)
+                if write_mask_png(full, np.asarray(mask).astype(np.uint8)):
+                    rec = self.layer(name)
+                    if rec is not None and rec.recon_mask_path is None:
+                        rec.recon_mask_path = os.path.relpath(full, out_dir).replace("\\", "/")
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
         return manifest_path
@@ -249,6 +282,14 @@ def load_manifest(path: str) -> dict[str, Any]:
     """读取 manifest（返回原始 dict，供质检/前端消费）。"""
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _safe_mask_filename(name: str) -> str:
+    """把图层名转成安全的掩码文件名（去除路径分隔符与非法字符）。"""
+    import re as _re
+    safe = _re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", str(name).strip())
+    safe = safe.strip("._") or "layer"
+    return f"{safe[:120]}.png"
 
 
 def write_mask_png(path: str, mask: np.ndarray) -> bool:

@@ -28,18 +28,23 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
     global_feats = fingerprint["global_features"]
     texture_feats = fingerprint["texture_features"]
     structure_feats = fingerprint["structure_features"]
-    
-    # 提取关键特征
+
+    # 关键修复（2026-09-15）：金地 / 宣纸水墨 / 绢本工笔 三族改用**中心主体区**统计。
+    # 扫描件外框常是博物馆灰底/桌面（实测 source_4000.jpg 外框 L37/b0，
+    # 而画心金地 L80/b38），用外框当"背景"会系统性误判。
+    # 油画布仍保留原外框口径（本次未标定，避免回归）。
     bg_L, bg_a, bg_b = global_feats["bg_median_LAB"]
     saturation = global_feats["saturation"]
+    cL, ca, cb = global_feats.get("center_median_LAB", global_feats["bg_median_LAB"])
+    csat = global_feats.get("center_saturation", global_feats["saturation"])
     edge_density = structure_feats["edge_density"]
     glcm_energy = texture_feats["glcm_energy"]
-    
+
     # 规则判别（优先级从高到低）
     scores = {
-        "金地屏风": _score_gold_screen(bg_L, bg_a, bg_b, saturation, edge_density),
-        "宣纸水墨": _score_ink_paper(bg_L, saturation, edge_density, glcm_energy),
-        "绢本工笔": _score_silk_painting(bg_L, saturation, edge_density, glcm_energy),
+        "金地屏风": _score_gold_screen(cL, ca, cb, csat, edge_density),
+        "宣纸水墨": _score_ink_paper(cL, cb, csat, edge_density, glcm_energy),
+        "绢本工笔": _score_silk_painting(cL, cb, csat, edge_density, glcm_energy),
         "油画布": _score_oil_canvas(bg_L, saturation, edge_density),
         "其他": 0.3,  # 兜底分数
     }
@@ -56,92 +61,114 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
 
 def _score_gold_screen(bg_L: float, bg_a: float, bg_b: float, saturation: float, edge_density: float) -> float:
     """
-    金地屏风：高亮度（L* > 80）+ 高 b*（黄色 > 20）+ 中饱和
+    金地屏风：金黄地子 —— 高 b*（黄）+ 高亮度 + 近中性 a* + 中高饱和。
+
+    标定（2026-09-15，source_4000.jpg 画心实测 L80 a5 b38 sat35）：
+    旧规则对外框灰底（L37 b0）恒失配 → 金地被误判为油画布；改用中心区后
+    以 b*（黄度）为主判据。
     """
     score = 0.0
-    
-    # 亮度判别（金地屏风 L* 普遍 ≥ 80，含边界 80）
-    if bg_L >= 80:
-        score += 0.4
-    elif bg_L > 70:
-        score += 0.2
-    
-    # 黄色偏移（b* > 20，金色特征）
-    if bg_b > 20:
-        score += 0.3
+
+    # 黄度（金地核心特征；标准 LAB 下金地 b* 可达 30–45）
+    if bg_b > 30:
+        score += 0.40
+    elif bg_b > 20:
+        score += 0.25
     elif bg_b > 10:
+        score += 0.10
+
+    # 亮度（金地明亮，但不若宣纸纯白）
+    if bg_L >= 75:
+        score += 0.30
+    elif bg_L > 65:
         score += 0.15
-    
-    # 饱和度（中等，15–40）
-    if 15 < saturation < 40:
-        score += 0.2
-    
-    # 边缘密度（装饰性强，中等偏高）
-    if 0.02 < edge_density < 0.08:
-        score += 0.1
-    
+
+    # a* 近中性（排除朱砂红、暖褐油画）
+    if abs(bg_a) < 15:
+        score += 0.15
+
+    # 中高饱和度（金色有色度）
+    if 20 < saturation < 55:
+        score += 0.15
+
+    # 装饰性边缘
+    if 0.03 < edge_density < 0.10:
+        score += 0.05
+
     return score
 
 
-def _score_ink_paper(bg_L: float, saturation: float, edge_density: float, glcm_energy: float) -> float:
+def _score_ink_paper(cL: float, cb: float, saturation: float,
+                     edge_density: float, glcm_energy: float) -> float:
     """
-    宣纸水墨：高亮度（L* > 90）+ 低饱和（< 10）+ 低边缘密度
+    宣纸水墨：无色/淡黄纸地 + 中高亮度 + **稀疏**笔触（写意）+ 平滑墨韵。
+
+    中心区口径重标定（2026-09-15）。与绢本工笔的区分点：水墨笔触更稀疏
+    （edge_density、glcm 更低）；据此在实测样本上 ink 胜出。
     """
     score = 0.0
-    
-    # 高亮度（纸白）
-    if bg_L > 90:
-        score += 0.4
-    elif bg_L > 85:
-        score += 0.2
-    
-    # 低饱和度（水墨无彩色）
-    if saturation < 10:
-        score += 0.3
-    elif saturation < 15:
+
+    # 纸地亮度（含淡墨区；中位数不必纯白）
+    if cL > 82:
+        score += 0.30
+    elif cL > 60:
+        score += 0.20
+
+    # 无色或淡黄（排除金地 b*≈38 与浓郁设色）
+    if cb < 12:
+        score += 0.30
+    elif cb < 20:
+        score += 0.20
+
+    # 稀疏笔触（写意）
+    if edge_density < 0.10:
+        score += 0.25
+    elif edge_density < 0.16:
         score += 0.15
-    
-    # 低边缘密度（写意笔触稀疏）
-    if edge_density < 0.03:
-        score += 0.2
-    elif edge_density < 0.05:
-        score += 0.1
-    
-    # GLCM 能量低（纹理变化大）
-    if glcm_energy < 0.15:
-        score += 0.1
-    
+
+    # 平滑墨韵（纹理能量低）
+    if glcm_energy < 0.22:
+        score += 0.15
+    elif glcm_energy < 0.28:
+        score += 0.10
+
     return score
 
 
-def _score_silk_painting(bg_L: float, saturation: float, edge_density: float, glcm_energy: float) -> float:
+def _score_silk_painting(cL: float, cb: float, saturation: float,
+                         edge_density: float, glcm_energy: float) -> float:
     """
-    绢本工笔：中亮度（L* 70–85）+ 中饱和（10–25）+ 高边缘密度（细腻）
+    绢本工笔：米黄绢地 + 中亮度 + **细腻密集**（工笔）纹理。
+
+    中心区口径重标定（2026-09-15）。关键区分点：绢本/织物纹理更密
+    （edge_density ≥ 0.16 或 glcm ≥ 0.28），据此与写意水墨拉开差距。
+    ⚠️ 无绢本真值样本，阈值为保守估计；待补样本后再校。
     """
     score = 0.0
-    
-    # 中亮度（绢本偏米黄）
-    if 70 < bg_L < 85:
-        score += 0.3
-    elif 65 < bg_L < 90:
-        score += 0.15
-    
-    # 中饱和度（设色工整）
-    if 10 < saturation < 25:
-        score += 0.3
-    elif 8 < saturation < 30:
-        score += 0.15
-    
-    # 高边缘密度（工笔细腻）
-    if 0.05 < edge_density < 0.12:
-        score += 0.2
-    elif 0.03 < edge_density < 0.15:
-        score += 0.1
-    
-    # GLCM 能量中等（纹理规整）
-    if 0.1 < glcm_energy < 0.2:
-        score += 0.1
-    
+
+    # 米黄绢地
+    if 10 <= cb < 30:
+        score += 0.20
+    elif 6 <= cb < 36:
+        score += 0.10
+
+    # 中亮度
+    if 65 < cL < 88:
+        score += 0.20
+    elif 58 < cL < 92:
+        score += 0.10
+
+    # 细腻密集（工笔/织物）——须显著高于水墨
+    if edge_density >= 0.16:
+        score += 0.30
+    elif edge_density >= 0.12:
+        score += 0.05
+
+    if glcm_energy >= 0.28:
+        score += 0.30
+    elif glcm_energy >= 0.22:
+        score += 0.05
+
     return score
 
 

@@ -22,20 +22,49 @@ PRESETS_DIR = "presets"
 
 
 def load_preset(preset_arg: str) -> dict[str, Any]:
-    """按名称或路径加载 preset JSON；找不到时回退传统水墨并告警。"""
+    """按名称或路径加载 preset JSON；找不到时回退传统水墨并告警。
+
+    加载后执行 ADR-005 校验（preset_schema.validate_preset）：
+    - 默认**只告警不拒绝**（兼容现有 6 个 preset 的 schema 差异）；
+    - 环境变量 `ULS_PRESET_STRICT=1` 时升级为异常（CI/交付前门禁）。
+    """
     if os.path.isfile(preset_arg):
         with open(preset_arg, "r", encoding="utf-8") as f:
-            return json.load(f)
+            preset = json.load(f)
+        return _validated(preset, preset_arg)
 
     path = os.path.join(PRESETS_DIR, f"{preset_arg}.json")
     if os.path.isfile(path):
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            preset = json.load(f)
+        return _validated(preset, preset_arg)
 
     fallback = "traditional_chinese_ink"
     print(f"Warning: Preset '{preset_arg}' not found, falling back to '{fallback}'")
     with open(os.path.join(PRESETS_DIR, f"{fallback}.json"), "r", encoding="utf-8") as f:
-        return json.load(f)
+        preset = json.load(f)
+    return _validated(preset, fallback)
+
+
+def _validated(preset: dict[str, Any], source: str) -> dict[str, Any]:
+    """对已加载 preset 执行非破坏性校验（默认告警，strict 模式抛错）。"""
+    try:
+        from engine.schemas.preset_schema import validate_preset
+    except Exception:
+        return preset
+
+    issues = validate_preset(preset)
+    if not issues:
+        return preset
+
+    strict = str(os.environ.get("ULS_PRESET_STRICT", "")).lower() in ("1", "true", "yes")
+    header = f"[PresetSchema] '{source}' 校验发现 {len(issues)} 处问题"
+    if strict:
+        raise ValueError(header + "（ULS_PRESET_STRICT=1，已拒绝）：\n  - " + "\n  - ".join(issues[:20]))
+    print(header + "（仅告警，未阻断；设 ULS_PRESET_STRICT=1 可升级为错误）")
+    for it in issues[:10]:
+        print(f"    - {it}")
+    return preset
 
 
 def get_name_mapping(preset: dict[str, Any]) -> Optional[dict[str, str]]:

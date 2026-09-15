@@ -8,6 +8,7 @@
 import sqlite3
 from pathlib import Path
 from typing import List, Optional, Set
+from datetime import datetime, timezone
 
 
 class CategoryTree:
@@ -122,6 +123,8 @@ class CategoryTree:
         try:
             ancestors = []
             current_id = category_id
+            # 防环：数据异常（如 parent_id 自环）时避免死循环
+            visited: Set[str] = {category_id}
             
             # 向上遍历 parent_id 链
             while True:
@@ -132,37 +135,77 @@ class CategoryTree:
                 if not parent or parent[0] is None:
                     break
                 
-                ancestors.append(parent[0])
-                current_id = parent[0]
+                pid = parent[0]
+                if pid in visited:
+                    # 检测到祖先链存在环（数据损坏），停止遍历而非挂死
+                    print(f"⚠️ 类目树祖先链检测到环：{category_id} → ... → {pid}，已截断")
+                    break
+
+                ancestors.append(pid)
+                visited.add(pid)
+                current_id = pid
             
             return ancestors
         
         finally:
             conn.close()
     
-    def inherit_priors(self, category_id: str, parent_id: str):
+    def inherit_priors(self, category_id: str, parent_id: str) -> dict:
         """从父类目继承形状先验（area_budget / elongation / compactness）
-        
-        ⚠️ TODO：当前 category_priors 表为空，暂无可继承数据。
-        此方法作为骨架预留，等 Stage 3 反馈学习填充 priors 后再实现。
-        
+
         设计逻辑：
         1. 查询 parent_id 的 category_priors（area_budget_min/max, elongation_mean/std, ...）
         2. 若父类目有先验数据，复制到 category_id 的 priors 行
         3. 标记来源：n_samples=0（表示继承而非统计）
-        
+
+        priors 表为空 / 父类目无先验时**优雅跳过**（返回状态字典，不抛异常），
+        避免在默认数据下让调用方崩溃。待 Stage 3 统计填充后再自然生效。
+
         Args:
             category_id: 子类目 ID
             parent_id: 父类目 ID
-        
-        Raises:
-            NotImplementedError: 当前 priors 表为空，方法未实现
+
+        Returns:
+            {"ok": bool, "inherited": bool, "reason": str}
         """
-        raise NotImplementedError(
-            "inherit_priors() 当前跳过实现。"
-            "原因：category_priors 表为空，无可继承数据。"
-            "待 Stage 3 反馈学习填充 priors 后再补完此方法。"
-        )
+        conn = self._get_conn()
+        try:
+            has_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='category_priors'"
+            ).fetchone() is not None
+            if not has_table:
+                return {"ok": False, "inherited": False,
+                        "reason": "category_priors 表不存在（跳过继承）"}
+
+            row = conn.execute(
+                """
+                SELECT area_budget_min, area_budget_max, elongation_mean, elongation_std,
+                       compactness_mean, compactness_std, n_components_mode
+                FROM category_priors WHERE category_id = ?
+                """,
+                (parent_id,),
+            ).fetchone()
+
+            if row is None:
+                return {"ok": False, "inherited": False,
+                        "reason": f"父类目 {parent_id} 无先验数据（跳过，待 Stage3 统计填充）"}
+
+            now = int(datetime.now(timezone.utc).timestamp())
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO category_priors (
+                    category_id, area_budget_min, area_budget_max, elongation_mean,
+                    elongation_std, compactness_mean, compactness_std,
+                    n_components_mode, n_samples, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                """,
+                (category_id, row[0], row[1], row[2], row[3], row[4], row[5], row[6], now),
+            )
+            conn.commit()
+            return {"ok": True, "inherited": True,
+                    "reason": f"从 {parent_id} 继承先验（n_samples=0 标记为继承来源）"}
+        finally:
+            conn.close()
 
 
 def get_default_tree() -> CategoryTree:

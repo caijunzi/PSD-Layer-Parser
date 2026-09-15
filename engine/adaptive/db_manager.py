@@ -175,6 +175,62 @@ class DBManager:
             return parent_id
         return None
     
+    def create_version(
+        self,
+        version_id: str,
+        changeset: str = "",
+        evidence: str = "",
+        parent_version_id: Optional[str] = None,
+        snapshot: Optional[Any] = None,
+        regression_status: str = "pending",
+        activate: bool = False,
+    ) -> bool:
+        """
+        创建一个新版本（写入 category_versions），补齐此前缺失的"版本创建"入口。
+
+        Args:
+            version_id: 版本 ID（如 "v2026-09-15T..."）
+            changeset: 变更摘要（人类可读）
+            evidence: 证据摘要（多少图 / 一致性）
+            parent_version_id: 父版本；None 时自动取最近一条版本的 version_id
+            snapshot: 快照对象（任意可 JSON 序列化内容），写入 snapshot_json
+            regression_status: pending / passed / failed
+            activate: 创建后是否立即激活
+
+        Returns:
+            是否成功
+        """
+        try:
+            now = int(datetime.now().timestamp())
+
+            if parent_version_id is None:
+                cur = self.execute(
+                    "SELECT version_id FROM category_versions ORDER BY created_at DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                parent_version_id = row["version_id"] if row else None
+
+            snapshot_json = json.dumps(snapshot or {}, ensure_ascii=False)
+            self.execute(
+                """
+                INSERT OR REPLACE INTO category_versions
+                    (version_id, parent_version_id, snapshot_json, changeset, evidence,
+                     regression_status, created_at, activated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (version_id, parent_version_id, snapshot_json, changeset,
+                 evidence, regression_status, now),
+            )
+            self.commit()
+
+            if activate:
+                return self.activate_version(version_id)
+            return True
+        except Exception as e:
+            self.rollback()
+            print(f"[ERROR] 创建版本失败：{e}")
+            return False
+
     def gc_old_versions(self, days: int = 30) -> int:
         """
         垃圾回收：删除 N 天前创建且未激活的版本

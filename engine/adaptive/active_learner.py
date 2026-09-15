@@ -48,21 +48,60 @@ def identify_uncertain_categories(
         [{"category_id": "water_ripples", "confidence": 0.62, "bbox": [...]}]
     """
     uncertain = []
-    
-    # 从 detections 中提取低置信类目
+
+    # 兼容两种输入：
+    #   ① 显式 detections（含 category_id / confidence / bbox）—— 文档示例格式
+    #   ② grounded_sam_provider.dino_detections（含 layer_name / logits / boxes）—— 生产真实格式
     detections = detection_result.get("detections", [])
+    if not detections:
+        detections = detection_result.get("dino_detections", [])
+
     for det in detections:
-        confidence = det.get("confidence", 0.0)
-        if confidence < confidence_threshold:
+        # 类目：显式 category_id 优先，回退 dino_detections 的 layer_name
+        category_id = det.get("category_id") or det.get("layer_name")
+
+        # 置信度：显式 confidence 优先；否则以 logits 最大值作为确定性代理
+        confidence = det.get("confidence")
+        max_logit = _max_logit(det.get("logits") if det.get("logits") is not None else det.get("logit"))
+        if confidence is None:
+            confidence = max_logit if max_logit is not None else 0.0
+
+        # bbox：显式 bbox 优先，回退 boxes 的第一个
+        bbox = det.get("bbox")
+        if bbox is None:
+            boxes = det.get("boxes")
+            try:
+                if boxes is not None and len(boxes) > 0:
+                    first = boxes[0]
+                    bbox = [float(v) for v in first] if hasattr(first, "__iter__") else None
+            except Exception:
+                bbox = None
+
+        if float(confidence) < confidence_threshold:
             uncertain.append({
-                "category_id": det.get("category_id"),
-                "confidence": confidence,
-                "bbox": det.get("bbox"),
+                "category_id": category_id,
+                "confidence": float(confidence),
+                "bbox": bbox,
                 "prompt": det.get("prompt"),
-                "logit": det.get("logit"),
+                "logit": det.get("logit") if det.get("logit") is not None else max_logit,
             })
-    
+
     return uncertain
+
+
+def _max_logit(logits) -> Optional[float]:
+    """从 logits（list / ndarray / torch.Tensor）中取最大值；无法解析时返回 None。"""
+    if logits is None:
+        return None
+    try:
+        import numpy as _np
+        arr = _np.asarray(logits, dtype=float).ravel()
+        return float(arr.max()) if arr.size else None
+    except Exception:
+        try:
+            return float(max(logits))
+        except Exception:
+            return None
 
 
 def request_human_feedback(

@@ -165,41 +165,75 @@ def apply_migration(db_path: str = "webui/data/adaptive_semantics.db"):
         
         # 2. 更新三级类目的 parent_id 与 path
         print("\n2. 更新三级类目（20 个）的父子关系...")
+        updated, skipped_self, missing = 0, 0, []
         for leaf_id, parent_id in LEAF_CATEGORIES.items():
+            # 防自环：二级与三级同名（如 architecture）时必须跳过，
+            # 否则会把节点挂到自己名下，造成 get_ancestors 死循环（历史缺陷）
+            if leaf_id == parent_id:
+                skipped_self += 1
+                print(f"   ⏭️ 跳过自环：{leaf_id}（二级/三级同名，保持其二级归属）")
+                continue
+
             # 查询父类目的 path
             parent_path = conn.execute(
                 "SELECT path FROM categories WHERE id = ?", (parent_id,)
             ).fetchone()
-            
+
             if not parent_path:
                 print(f"   ⚠️ 父类目不存在：{parent_id}（跳过 {leaf_id}）")
                 continue
-            
+
             # 新 path = parent_path + leaf_id + "/"
             new_path = parent_path[0] + leaf_id + "/"
-            
-            # 更新三级类目
-            conn.execute(
+
+            # 更新三级类目（用 rowcount 校验是否真的命中，杜绝"假成功"日志）
+            cur = conn.execute(
                 "UPDATE categories SET parent_id = ?, path = ?, updated_at = ? WHERE id = ?",
                 (parent_id, new_path, now, leaf_id),
             )
-            print(f"   ✅ 更新：{leaf_id} → parent={parent_id}, path={new_path}")
-        
+            if cur.rowcount == 0:
+                missing.append(leaf_id)
+                print(f"   ⚠️ 未命中（类目不存在，跳过）：{leaf_id}")
+            else:
+                updated += 1
+                print(f"   ✅ 更新：{leaf_id} → parent={parent_id}, path={new_path}")
+
+        # 2.5 修复历史自环（旧版本已把 architecture 挂到自己名下）
+        self_loops = conn.execute(
+            "SELECT id FROM categories WHERE parent_id = id"
+        ).fetchall()
+        for (sl_id,) in self_loops:
+            conn.execute(
+                "UPDATE categories SET parent_id = ?, path = ?, updated_at = ? WHERE id = ?",
+                ("landscape_painting", "/landscape_painting/" + sl_id + "/", now, sl_id),
+            )
+            print(f"   🔧 修复自环：{sl_id} → parent=landscape_painting")
+
         # 3. 提交事务
         conn.commit()
-        print("\n=== 迁移完成 ===")
-        
+        print(f"\n=== 迁移完成（更新 {updated} 个 / 跳过自环 {skipped_self} 个 / "
+              f"未命中 {len(missing)} 个 / 修复自环 {len(self_loops)} 个）===")
+
+        if missing:
+            print(f"⚠️ 以下叶子类目在 categories 表中不存在，已跳过：{missing}")
+
         # 4. 验证结果
         print("\n验证结果：")
         total = conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0]
         with_parent = conn.execute(
             "SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL"
         ).fetchone()[0]
+        remaining_self_loops = conn.execute(
+            "SELECT COUNT(*) FROM categories WHERE parent_id = id"
+        ).fetchone()[0]
         print(f"- 总类目数：{total}")
         print(f"- 有父类目的数量：{with_parent}（≥10 为预期）")
-        
+        print(f"- 残留自环数量：{remaining_self_loops}（应为 0）")
+
         if with_parent < 10:
             print("\n⚠️ 警告：parent_id 非空数量不足 10，迁移可能未完全生效")
+        if remaining_self_loops:
+            print("\n⚠️ 警告：仍存在自环，get_ancestors 可能异常")
         
         # 5. 展示树结构样本
         print("\n树结构样本（前 10 条）：")

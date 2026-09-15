@@ -434,3 +434,66 @@ async def submit_category_feedback_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"应用反馈失败: {str(e)}")
 
+
+# ========== Stage 3：后台学习任务端点（此前仅 docstring 声明，从未注册） ==========
+
+
+def _ensure_project_root_on_path() -> None:
+    """确保项目根在 sys.path（engine 包可被 webui 后端导入）。"""
+    import sys
+    from pathlib import Path as _P
+    root = str(_P(__file__).resolve().parent.parent.parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+@router.post("/adaptive/trigger-learning")
+async def trigger_learning_endpoint(episode_id: Optional[str] = Form(None)):
+    """手动触发一次后台学习任务（Stage 3）。
+
+    Args:
+        episode_id: 可选。缺省时对最近一个已归档 episode 触发。
+
+    Returns:
+        {"status", "episode_id", "message"}
+    """
+    _ensure_project_root_on_path()
+    try:
+        from core.background_learner import get_background_learner
+
+        if not episode_id:
+            from engine.adaptive.episode_archiver import load_episodes
+
+            recent = load_episodes(limit=1)
+            if not recent:
+                raise HTTPException(status_code=404, detail="无可用 episode（归档为空）")
+            episode_id = recent[0].get("episode_id")
+
+        learner = get_background_learner()
+        return learner.enqueue_learning_task(episode_id, trigger="manual")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"触发学习任务失败: {str(e)}")
+
+
+@router.get("/adaptive/learning-status")
+async def learning_status_endpoint(limit: int = 100, status: Optional[str] = None):
+    """查询后台学习任务状态（Stage 3）。
+
+    Args:
+        limit: 最多返回条数（默认 100）
+        status: 可选状态过滤（queued / running / completed / failed）
+
+    Returns:
+        {"tasks": [ {...}, ... ]}
+    """
+    _ensure_project_root_on_path()
+    try:
+        from core.background_learner import get_background_learner
+
+        learner = get_background_learner()
+        return {"tasks": learner.get_all_task_status(limit=limit, status_filter=status)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询学习状态失败: {str(e)}")
+

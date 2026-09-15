@@ -20,6 +20,16 @@
 > DESIGN 线输出 RGB 元素层（RealESRGAN + LaMa，生成内容逐层落掩码）；
 > `--mode both` 一次产出两份。运行时裁切线由 contour_protection 计算（Y=718 硬编码退役）；
 > 随机种子固定（--seed，同 seed 产物逐像素可复现）。详见尽调报告 §十二。
+>
+> **2026-09-15 状态校正（P0–P2 修复批次）**：
+> ① 自适应语义链路**已真正启用**（`japanese_screen_gold.json` 顶层 `mode=hybrid` + `auto_evolve=true`），
+>    此前因 preset 缺顶层 `mode` 恒为 `locked`、Stage 1/2/4 引擎侧代码从不执行；
+> ② **PLATE 线已打通**（上表 §一 旧"🔴 未打通"标注已更正——该行是内核合流前的历史快照）；
+> ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
+> ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
+>    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
+> 测试：引擎 **159 passed / 2 skipped**，WebUI **28 OK**（2026-09-15）。
+> ⚠️ 本批次 ③ 改变了 PSB 输出与耗时，按铁律须重跑金标准回归与 RK-16 逐像素复核后方可交付。
 
 ---
 
@@ -52,7 +62,7 @@
 | 层语义 | 工艺版层（固定，由工艺决定） | 元素层（不定，由画面内容决定） |
 | 层几何 | 全画布 | 元素紧凑最小外接包围盒 (Non-zero BBox) |
 | 命名 | `03_Print_Antique_Gold_CMYK` | `06_Architecture_Pavilion` |
-| 状态 | 🔴 **未打通**：微孔/烫金/陷印/轮廓算子已实现，但**均未接入生产链路**，实测产物为 RGB | 🟡 能产出 16K PSB；元素掩模泄漏已修复，**待重跑产物复核** |
+| 状态 | ✅ **已打通**：真 CMYK 分色（ICC FOGRA39、有黑版、TAC≤300%、零生成、纯净性自动校验）；算子链 contour_protection / micro_holes / trapping 已接线，seam_harmonizer(R3) / metallic_foil 为品类可选（2026-09-15 新增接线） | ✅ 能产出 16K PSB；元素掩模泄漏已修复；生成内容逐层落掩码 PNG（2026-09-15 补全 R1 落盘链路） |
 
 ---
 
@@ -69,14 +79,14 @@
 | 4 | CBR 案例推理库（PCA128 指纹余弦检索，复用相似历史图参数，冷启动加速） | ✅ |
 | 5.1 | 类目树（3 层：山水画 → 7 大类 → 20 类目，含无环检测） | ✅ |
 | 5.2 | 主动学习（识别 confidence<0.7 类目 → 人审 → 权重更新，轮询方案） | ✅ |
-| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构（新建 `components/`） | ⏳ 待做 |
+| 5.3 | 前端人审弹窗 + Auto-Tune 卡片重构（新建 `components/`） | ✅ |
 
 **三条关键架构决策**（ADR-021/022/023，详见 `docs/MEMORY.md`）：
 1. episode 存储走**文件系统 JSONL**，不建 `episodes` 数据库表
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
 3. `inherit_priors()` **跳过实现标 TODO**（`category_priors` 表为空，等真实统计）
 
-> ⚠️ 引擎全量测试基线 **128 passed / 2 skipped**。
+> ⚠️ 引擎全量测试基线 **152 passed / 2 skipped**（含 Stage 5 e2e 14 + 接线守卫 10）。
 
 ---
 

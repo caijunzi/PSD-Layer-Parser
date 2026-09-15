@@ -95,6 +95,24 @@ def _extract_global_features(image: np.ndarray, w: int, h: int) -> Dict:
     bg_pixels = lab_std[bg_mask]
     bg_median_L, bg_median_a, bg_median_b = np.median(bg_pixels, axis=0)
 
+    # 中心「主体区」统计（去掉外框 15%）——修复 2026-09-15：
+    # 扫描件外框常是博物馆灰底/桌面，用它估计"背景材质"会完全失真
+    # （实测 source_4000.jpg 外框 L37.3/b0.0，而画心金地是 L80/b38）。
+    # 因此补充中心区统计，供材质判别优先使用；不加入 vector，避免改变 embedding 维度。
+    my, mx = int(h * 0.15), int(w * 0.15)
+    if (h - 2 * my) > 0 and (w - 2 * mx) > 0:
+        center = lab_std[my:h - my, mx:w - mx]
+    else:
+        center = lab_std
+    center_flat = center.reshape(-1, 3)
+    c_med = np.median(center_flat, axis=0)
+    center_median_L, center_median_a, center_median_b = (
+        float(c_med[0]), float(c_med[1]), float(c_med[2]),
+    )
+    center_saturation = float(
+        np.sqrt(np.mean(center[:, :, 1]) ** 2 + np.mean(center[:, :, 2]) ** 2)
+    )
+
     # 全图色彩统计（标准 LAB 各通道）
     L_mean, a_mean, b_mean = np.mean(lab_std, axis=(0, 1))
     L_std, a_std, b_std = np.std(lab_std, axis=(0, 1))
@@ -128,6 +146,9 @@ def _extract_global_features(image: np.ndarray, w: int, h: int) -> Dict:
         "megapixels": megapixels,
         "bg_median_LAB": (bg_median_L, bg_median_a, bg_median_b),
         "saturation": saturation,
+        # 中心主体区统计（材质判别优先使用；非 vector 成员，不影响 embedding）
+        "center_median_LAB": (center_median_L, center_median_a, center_median_b),
+        "center_saturation": center_saturation,
     }
 
 

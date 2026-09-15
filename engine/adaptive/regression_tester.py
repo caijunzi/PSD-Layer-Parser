@@ -67,13 +67,19 @@ def extract_audit_8d(audit_json_path: str) -> Dict[str, Any]:
     layer_metrics = dims.get("① 层属性", {}).get("metrics", {})
     n_layers = layer_metrics.get("layer_count", 0)
     
-    # total_size_mb 从顶层提取（如果审计文件有 size 字段）
-    total_size_mb = 0.0  # 简化：审计文件中没有直接的文件大小字段
-    
-    # backend（从 manifest 或 audit 元数据中提取，此处简化为从文件名判断）
-    # 实际实现中可从 manifest.json 的 totals.backend 字段读取
-    backend = "unknown"
-    
+    # total_size_mb：审计文件不含文件大小，改从同目录 PSB 实体文件取
+    total_size_mb = 0.0
+    try:
+        import os
+        psb_path = audit.get("psb")
+        if psb_path and os.path.isfile(psb_path):
+            total_size_mb = round(os.path.getsize(psb_path) / (1024 * 1024), 3)
+    except Exception:
+        total_size_mb = 0.0
+
+    # backend：优先取审计文件显式字段（tools/audit_psb.py 写入时携带），否则 unknown
+    backend = audit.get("backend", "unknown")
+
     return {
         "lost_ratio": lost_ratio,
         "rmse_raw": rmse_raw,
@@ -163,23 +169,43 @@ def run_regression_test(
     baseline = baseline_all[task_id]
     current = extract_audit_8d(current_audit_path)
     
-    # 回归检查：核心指标（lost_ratio, rmse_lowfreq）退化 > threshold 视为失败
+    # 回归检查（8 维口径对齐）：
+    #   恶化型（越大越差）：lost_ratio / rmse_raw / rmse_lowfreq / tac_max_pct
+    #   减少型（越小越差）：n_layers
+    #   布尔型：plate_purity_ok 由 True 变 False
     issues = []
-    
-    # lost_ratio 增大 > threshold
-    if current["lost_ratio"] > baseline["lost_ratio"] * (1 + threshold):
-        delta = (current["lost_ratio"] - baseline["lost_ratio"]) / baseline["lost_ratio"] * 100
-        issues.append(f"内容丢失比例退化: {baseline['lost_ratio']:.4f} → {current['lost_ratio']:.4f} (+{delta:.1f}%)")
-    
-    # rmse_lowfreq 增大 > threshold
-    if current["rmse_lowfreq"] > baseline["rmse_lowfreq"] * (1 + threshold):
-        delta = (current["rmse_lowfreq"] - baseline["rmse_lowfreq"]) / baseline["rmse_lowfreq"] * 100
-        issues.append(f"低频 RMSE 退化: {baseline['rmse_lowfreq']:.2f} → {current['rmse_lowfreq']:.2f} (+{delta:.1f}%)")
-    
-    # plate_purity_ok 从 True 变 False
-    if baseline["plate_purity_ok"] and not current["plate_purity_ok"]:
+
+    def _pct_delta(cur: float, base: float) -> float:
+        """相对基线变化百分比；基线为 0 时返回 inf（用于触发退化判定而不除零）。"""
+        if base == 0:
+            return 0.0 if cur == 0 else float("inf")
+        return (cur - base) / base * 100.0
+
+    # 恶化型指标
+    for key, label, fmt in [
+        ("lost_ratio", "内容丢失比例", "{:.4f}"),
+        ("rmse_raw", "原始 RMSE", "{:.2f}"),
+        ("rmse_lowfreq", "低频 RMSE", "{:.2f}"),
+        ("tac_max_pct", "TAC 峰值", "{:.1f}"),
+    ]:
+        base_v = float(baseline.get(key, 0.0) or 0.0)
+        cur_v = float(current.get(key, 0.0) or 0.0)
+        if cur_v > base_v * (1 + threshold):
+            delta = _pct_delta(cur_v, base_v)
+            delta_txt = "→ 基线为0" if delta == float("inf") else f"+{delta:.1f}%"
+            issues.append(f"{label}退化: {fmt.format(base_v)} → {fmt.format(cur_v)} ({delta_txt})")
+
+    # 减少型：层数比基线下降 > threshold
+    base_layers = int(baseline.get("n_layers", 0) or 0)
+    cur_layers = int(current.get("n_layers", 0) or 0)
+    if base_layers > 0 and cur_layers < base_layers * (1 - threshold):
+        delta = (cur_layers - base_layers) / base_layers * 100.0
+        issues.append(f"图层数减少: {base_layers} → {cur_layers} ({delta:.1f}%)")
+
+    # 布尔型：底板纯净性由 True 变 False
+    if baseline.get("plate_purity_ok") and not current.get("plate_purity_ok"):
         issues.append("底板纯度退化: True → False")
-    
+
     passed = len(issues) == 0
     
     return {

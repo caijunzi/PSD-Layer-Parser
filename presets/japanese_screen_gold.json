@@ -1,5 +1,7 @@
 {
   "preset_name": "japanese_screen_gold",
+  "mode": "hybrid",
+  "auto_evolve": true,
   "description": "日本金地屏风/障壁画通用印前分层预设 (长泽芦雪《金地山水图》标准)",
   "ai_semantic_classes": [
     {
