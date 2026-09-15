@@ -103,55 +103,11 @@ def _find_base_layer(layers, base_keywords=None):
                  if any(k in _clean(ly.name) for k in keys)), None)
 
 
-def _alpha(a: np.ndarray) -> np.ndarray:
-    """取图层的 Alpha 通道（自动识别通道布局）。
-
-    ⚠️ 关键修复（2026-09-16）：psd_tools 的 `layer.numpy()` 通道数随色彩模式变化：
-      - RGB 层  → (H, W, 4) = R, G, B, Alpha    → Alpha 在 index 3
-      - CMYK 层 → (H, W, 5) = C, M, Y, K, Alpha → Alpha 在 index **4**
-    此前写死 `a[:, :, 3]`，在 CMYK（PLATE 线）产物上取到的是 **K 通道**。
-    ICC 真分色后 K 在整幅上大面积非零（去墨重构的底板 K 恒为 1.0）→ 所有掩码
-    被判成「全画布」→ ② 分辨率真实性 / ③ 实例重复 / ④ 内容承载 / ⑥ 底板纯净度
-    全部基于错误掩码计算，④ 更是恒定为「零丢失」的假通过。
-
-    实测（outputs/adaptive-e2e-20260915-rerun/case-01..03）：
-      修复前 CMYK 产物 union 恒为 100.0%；修复后 63.77%（金地）/ 69.95%（商用）。
-      RGB（design 线）产物不受影响——4 通道下 index 3 本就是 Alpha，
-      这正是此前「只有 PLATE 线样本问题多」的原因。
-    """
-    if a.ndim != 3 or a.shape[2] < 4:
-        return np.ones(a.shape[:2], np.float32)
-    idx = 4 if a.shape[2] >= 5 else 3
-    al = a[:, :, idx].astype(np.float32)
-    return al / 255.0 if al.max() > 1.001 else al
-
-
-def _layer_rgb(ly) -> np.ndarray:
-    """把图层像素归一为 0..255 的 RGB 数组（用于与源图 RGB 比对）。
-
-    psd_tools 的 `numpy()` 对 CMYK 层返回 (H, W, 5) = C, M, Y, K, Alpha，
-    但取值语义是**呈色**（= 1 - 墨量），实测：象牙底板 C=.961 M=.910
-    Y=.829 K=1.000（K=1.0 表示 0% 黑版）。因此转 RGB 直接用乘法：
-        R = (1-墨量C) * (1-墨量K) = v0 * v3
-        G = v1 * v3,  B = v2 * v3
-    此前 ④ 直接用 `ba[:, :, :3]`，在 CMYK 产物上把 **C,M,Y 当成了 R,G,B** 与源图
-    比对，比较基准完全错位。
-
-    ⚠️ 注意：本函数做的是**无 ICC 的近似转换**，只用于「底板 vs 源图」的
-    差异定位（阈值 >40 的粗判），不用于 ⑤ 的合成等价性（那里必须走同一 ICC）。
-    返回的数组仅覆盖图层 bbox，调用方需自行补边到整画布。
-    """
-    a = ly.numpy()
-    if a.ndim != 3 or a.shape[2] < 3:
-        return np.zeros(a.shape[:2] + (3,), np.float32)
-    if a.shape[2] >= 5:
-        cmyk = a[..., :4].astype(np.float32)
-        k_keep = cmyk[..., 3]
-        return np.stack([cmyk[..., 0] * k_keep,
-                         cmyk[..., 1] * k_keep,
-                         cmyk[..., 2] * k_keep], -1) * 255.0
-    rgb = a[..., :3].astype(np.float32)
-    return rgb * 255.0 if rgb.max() <= 1.001 else rgb
+# ⚠️ 2026-09-16 根因修复：通道读取统一收敛到单一权威入口
+# `engine.core.psd_layer_io`，消灭散落各处的 `[:, :, 3]` / `[:, :, :3]` 索引假设。
+# 保留 `_alpha` / `_layer_rgb` 两个名字仅为了兼容既有测试与调用点，
+# 真实逻辑以 `psd_layer_io` 为准（含完整 docstring）。
+from engine.core.psd_layer_io import layer_alpha as _alpha, layer_rgb as _layer_rgb  # noqa: E402
 
 
 def _full_mask(ly, H: int, W: int) -> np.ndarray:

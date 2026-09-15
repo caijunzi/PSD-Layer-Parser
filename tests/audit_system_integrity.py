@@ -37,6 +37,9 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from engine.core.models import QAReport, new_run_id  # noqa: E402
+# 2026-09-16 根因修复：图层 Alpha 读取统一走权威入口，避免 CMYK 产物上
+# `lyr.numpy()[:, :, 3]` 误取 K 通道（使防欺骗审计整体失效）。
+from engine.core.psd_layer_io import layer_alpha as _layer_alpha  # noqa: E402
 
 # ---------------- 阈值（后续迁入 engine/schemas/）----------------
 FILL_RATIO_MIN = 0.00001   # 低于此值判为空层缺陷
@@ -238,7 +241,9 @@ def run_deliverable_audit(rep: QAReport, psb_path: str | None) -> None:
 
     print(f"    {'图层':<40}{'fill%':>9}{'cover%':>8}{'基线fill%':>10}{'倍数':>9}{'IoU':>7}  判定")
     for lyr in psd:
-        alpha = lyr.numpy()[:, :, 3]
+        # ⚠️ 必须走 _layer_alpha（按层实际通道数取真实 Alpha），
+        # 直接 lyr.numpy()[:, :, 3] 在 CMYK(PLATE) 产物上取到的是 K 通道。
+        alpha = _layer_alpha(lyr)
         # 还原到全画幅坐标才能与基线比对
         full = np.zeros((psd.height, psd.width), dtype=np.uint8)
         full[lyr.top:lyr.bottom, lyr.left:lyr.right] = (alpha > 0.5).astype(np.uint8)

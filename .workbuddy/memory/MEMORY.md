@@ -8,7 +8,7 @@
 - **必须用系统 Python 3.12.10**：
   `C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe`
   （WorkBuddy managed 3.13.12 **无 numpy**）。已装 numpy/sklearn/cv2/PIL/psd_tools/pytoshop/skimage。
-- 引擎全量：`py -m pytest tests/ -q`（基线 **216 passed / 2 skipped**）
+- 引擎全量：`py -m pytest tests/ -q`（基线 **233 passed / 2 skipped**）
 - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`
   （**不可加 `-t`**，否则 base 模块 import 失败；**34 OK**）
 - Git Bash 缺 `tail`/`head`/`ls`；`rm` 被 safe-delete 钩子拦截（exit 127）
@@ -105,6 +105,14 @@
   披露 `carrier_layers` / `excluded_process_layers` / `erased_pct` / `union_pct`。
 - **⑦ 的 `a[:, :, 3]` 是有意取 K 通道**（真黑版判定），已收紧为 `shape[2] >= 5`
   并加注释。**改 `_alpha` 时勿连带改它。**
+- **★ 通道读取已收敛为单一权威入口 `engine/core/psd_layer_io.py`**
+  （`layer_alpha`/`layer_rgb`/`full_alpha_mask`），按层实际通道数判定，同时接受层对象与 ndarray。
+  `tools/audit_psb.py` 的 `_alpha`/`_layer_rgb` 是**别名**（绑定同一对象，勿再写第二份实现）；
+  `tests/audit_system_integrity.py:241` 防欺骗审计也曾用 `lyr.numpy()[:, :, 3]` 误取 K → 已改走
+  共享入口。**新增静态测试** `TestSharedLayerIoSingleSource.test_no_stray_numpy_index3_in_audit_modules`
+  扫描 audit_psb/audit_system_integrity 禁止再出现手写 `numpy()[:, :, 3]`/`[:, :, :3]`，防回退。
+- **实测关键结论**：pytoshop 强制整份 PSD 同模式（混 CMYK+RGBA 抛 "Mismatched color mode"），
+  故单 PSD 内**不会混层**；真实产物要么全 RGB(4ch) 要么全 CMYK(5ch)，危险模式只剩"假设全 4 通道"。
 - **基线**：引擎 **227 passed / 2 skipped**；WebUI **34 OK**。
   新增测试类 `TestAlphaChannelLayout` / `TestLayerRgbConversion` /
   `TestProcessLayersExcludedFromCarrier`（`tests/test_audit_psb.py`）。

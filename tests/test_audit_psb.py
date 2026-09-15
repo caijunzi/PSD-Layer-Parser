@@ -253,5 +253,109 @@ class TestBaseLayerNotHardcodedGold(unittest.TestCase):
         self.assertIn("Base_Ground", DEFAULT_BASE_KEYWORDS)
 
 
+class TestSharedLayerIoSingleSource(unittest.TestCase):
+    """2026-09-16 根因修复：所有 PSD 层读取必须收敛到单一权威入口
+    `engine.core.psd_layer_io`，杜绝散落的 `[:, :, 3]` / `[:, :, :3]` 索引假设。
+
+    本测试锁定「无第二份实现」——若有人又在某处手写了 `lyr.numpy()[:, :, 3]`，
+    这里的同一对象断言会失败，强制其复用共享入口。
+    """
+
+    def test_audit_psb_alpha_is_shared(self):
+        from tools.audit_psb import _alpha
+        from engine.core.psd_layer_io import layer_alpha
+        self.assertIs(_alpha, layer_alpha,
+                      "audit_psb._alpha 必须是 psd_layer_io.layer_alpha，不能有第二份实现")
+
+    def test_audit_psb_rgb_is_shared(self):
+        from tools.audit_psb import _layer_rgb
+        from engine.core.psd_layer_io import layer_rgb
+        self.assertIs(_layer_rgb, layer_rgb,
+                      "audit_psb._layer_rgb 必须是 psd_layer_io.layer_rgb，不能有第二份实现")
+
+    def test_audit_system_integrity_uses_shared_alpha(self):
+        # 防欺骗审计（tests/audit_system_integrity.py）曾用 lyr.numpy()[:, :, 3]，
+        # 在 CMYK 产物上误取 K 通道 → 审计整体失效。必须走共享入口。
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "audit_system_integrity_test", ROOT / "tests/audit_system_integrity.py")
+        ai = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ai)
+        from engine.core.psd_layer_io import layer_alpha
+        self.assertIs(ai._layer_alpha, layer_alpha,
+                       "audit_system_integrity 必须复用 psd_layer_io.layer_alpha")
+
+    def test_no_stray_numpy_index3_in_audit_modules(self):
+        # 静态断言：生产/验收路径不得再出现手写 `numpy()[:, :, 3]` / `[:, :, :3]`。
+        import re
+        offenders = []
+        for path in ("tools/audit_psb.py", "tests/audit_system_integrity.py"):
+            src = open(ROOT / path, encoding="utf-8").read()
+            for i, line in enumerate(src.splitlines(), 1):
+                # 排除 docstring/注释与共享模块里「有意取 K（index 3）」的黑版判定
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "numpy()" in line and (re.search(r"\]\[\s*:\s*,\s*:\s*3\s*\]", line)
+                                          or re.search(r"\]\[\s*\.\.\.\s*,\s*3\s*\]", line)
+                                          or re.search(r"\]\[\s*:\s*,\s*:\s*:3\s*\]", line)):
+                    # ⑦ 黑版判定里「有意取 K」在 psd_layer_io 之外的代码不得出现
+                    if "K" not in line and "k_channel" not in line and "黑版" not in line:
+                        offenders.append(f"{path}:{i}: {stripped}")
+        self.assertEqual(offenders, [],
+                         "发现散落的硬编码通道索引（应改用 psd_layer_io 共享入口）：\n"
+                         + "\n".join(offenders))
+
+
+class TestLayerAlphaRealCMYKPSB(unittest.TestCase):
+    """端到端回归：真实编译的 CMYK(PLATE) 产物，layer_alpha 取到真实 Alpha 而非 K。
+
+    实测（本测试）：0% 黑墨 → 磁盘 K 通道恒为 255 → 旧 `[:, :, 3]` 口径覆盖 100%，
+    而 layer_alpha 取真实 transparency，覆盖应为实际掩码比例。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import os
+        from engine.codecs_accelerator import install_psb_codec_accelerator
+        install_psb_codec_accelerator()
+        from engine.core.models import LayerDescriptor, ProcessingContext
+        from engine.core.psd_compiler import PsdCompiler
+        from psd_tools import PSDImage
+
+        W, H = 64, 48
+        ctx = ProcessingContext(ppi=150.0, canvas_px=(W, H))
+        ctx.output_mode = "PLATE"
+        cmyk = np.zeros((4, H, W), np.uint8)
+        cmyk[0], cmyk[1], cmyk[2], cmyk[3] = 30, 60, 120, 0  # K=0% 黑墨
+        a1 = np.zeros((H, W), np.uint8)
+        a1[10:38, 10:54] = 255  # 部分覆盖：28×44
+        ctx.layers.append(LayerDescriptor(name="01_CMYK", layer_type="print_cmyk",
+                                           cmyk_channels=cmyk, alpha=a1, bbox=(0, 0, W, H)))
+        d = tempfile.mkdtemp()
+        cls._psb = os.path.join(d, "one.psb")
+        PsdCompiler.compile_psd(ctx, cls._psb, output_mode="PLATE")
+        cls._psd_obj = PSDImage.open(cls._psb)
+        cls._W, cls._H = W, H
+
+    def test_real_cmyk_layer_has_5_channels(self):
+        ly = list(self._psd_obj)[0]
+        self.assertEqual(ly.numpy().shape[2], 5, "CMYK 层应为 5 通道（C,M,Y,K,Alpha）")
+
+    def test_layer_alpha_returns_true_mask_not_k(self):
+        from engine.core.psd_layer_io import layer_alpha
+        ly = list(self._psd_obj)[0]
+        al = layer_alpha(ly)
+        true_cov = (28 * 44) / (self._H * self._W)
+        self.assertAlmostEqual(float((al > 0.03).mean()), true_cov, places=4,
+                               msg="应取真实 Alpha（部分覆盖），而非 K 通道（旧口径 100%）")
+        # 对照：旧口径读到的是 K（0% 黑墨→磁盘 255→全覆盖）
+        a = ly.numpy()
+        old_cov = float((a[:, :, 3] > 0.03).mean())
+        self.assertAlmostEqual(old_cov, 1.0, places=4,
+                                msg="旧口径在 CMYK 上确实误取 K 通道=全画布")
+
+
 if __name__ == "__main__":
     unittest.main()
