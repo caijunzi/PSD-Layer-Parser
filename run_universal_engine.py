@@ -737,6 +737,21 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         for k in dropped:
             print(f"     - [allowlist] 丢弃非品类层: {k} ({np.count_nonzero(masks_dict[k])} px)")
         masks_dict = {k: v for k, v in masks_dict.items() if k in set(rule_allow)}
+        if not masks_dict and dropped:
+            # 2026-09-16：白名单清空全部产出 = 零语义层，产物必然退化为
+            # 「底板 + 残层 + 工艺层」，语义内容全丢。此前静默继续，只在审计 ⑤ 才暴露。
+            # 根因通常是二者打架：adaptive（hybrid）用 DB 类目覆盖了 preset 的
+            # ai_semantic_classes，而 DB 类目与 preset 的品类白名单不相交。
+            # 实测：damask_sample.png + textile_damask 即命中此情形（白名单只允许
+            # 02_巴洛克团花，而 adaptive 覆盖后的检出全是屏风系）。
+            print(f"  -> ⚠️  白名单清空全部产出：{len(dropped)} 个检出层均不在 "
+                  f"rule_class_allowlist 内 → 零语义对象掩模。")
+            print(f"     品类白名单 = {rule_allow}")
+            print("     常见根因：adaptive(hybrid) 用 DB 类目覆盖了 preset 的 "
+                  "ai_semantic_classes，而 DB 类目与该白名单不相交。")
+            print("     处置：为素材换用匹配的 preset，或（若确需 adaptive）"
+                  "按品类重建该 preset 的白名单。产物将退化为底板+残层+工艺层，"
+                  "审计 ④/⑤ 应判失败——不得放宽阈值掩盖。")
     print(f"  -> [{grounded_sam.backend}] 成功提取 {len(masks_dict)} 个解耦语义对象掩模:")
     for mname, mdata in sorted(masks_dict.items()):
         print(f"     * {mname:<38}: {np.count_nonzero(mdata):>8} 像素")

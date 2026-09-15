@@ -223,7 +223,7 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 
 ### 8.4 测试基线（2026-09-16）
 
-引擎全量：**216 passed / 2 skipped**；WebUI：**34 passed**。
+引擎全量：**227 passed / 2 skipped**；WebUI：**34 passed**。
 专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。九样本隔离 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
 
 上一轮复测共 18 次运行，18 个 PSB 均生成，9/9 样本达到 cold/repeat 字节可复现，生产 DB 哈希未变化。8/18 次通过 8 维审计；水墨 3 张和油画的 repeat 均满足日志白名单命中及 episode `notes` 中 `cbr_reused=1`。
@@ -241,10 +241,49 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 ④丢 8.712%/20.004%、⑤ RMSE 26.72/44.63 失败。改用 `chinese_ink_landscape_ai` 后 **8 维全过**：
 ④ 降至 0.004%/0.292%，⑤ 降至 1.86/2.17。**根因是 preset 选择错误**。
 
-**残余项（未闭环）**：壁布 plate（`damask_sample.png`）⑤ 仍失败。根因已定位：`textile_damask`
-的 `ai_semantic_classes` 仅 2 个类目（巴洛克团花/金箔卷草纹样），对测试图零掩模产出；provider 规则
-引擎产出的屏风系类目被 `rule_class_allowlist` 全部丢弃 → 产物只剩底板+残层 → 花纹内容丢失、合成偏亮。
-修复需按品类重建该 preset 的类目与掩模链路，属独立专项。
+**残余项：壁布 plate（`damask_sample.png`）未通过 —— 三层根因（2026-09-16 定案）**
+
+> ⚠️ 该结论经一次误判与修正：曾用「金色像素占比 9.412%」**推断**类目命中并据此
+> 宣布"前提被推翻"。那只证明「图上有金色」，**不能证明 DINO 检出了该类别**。
+> 属以派生统计替代检测结果的过度推断。最终以 `cold.log` 第一手检出记录为准。
+
+1. **素材前提不满足**：该图是壁布**实物样品照**（画面外背景 / 画布硬边缘 / 右侧折边 /
+   右下角「AI生成 WORKBUDDY」水印），上下平铺接缝差 **20.44**（图内 std 仅 22.10）
+   → **不可无缝平铺**；而 `textile_damask` 含 `seam_harmonization: cyclic_vertical`。
+   硬边界 row 48~52/968~970，col 75~78/1118/1454~1458。
+2. **DINO 对该 preset 的 2 个壁布类目零检测**：检出全是屏风系
+   （09_Calligraphy_Inscription / 06_Architecture_Pavilion / 05_Trees_Vegetation /
+   03_Distant_Mountains），bbox 近全画布被**弥散门**拒 4 个。
+3. **adaptive 覆盖与 allowlist 冲突（真代码缺陷）**：`run_universal_engine.py` 第 574/637 行
+   用 adaptive 从 DB 选的类目**覆盖** `preset["ai_semantic_classes"]`，而 DB 的 27 个类目
+   全在「山水画」树下 → 检出屏风系 → 被
+   `rule_class_allowlist=["02_巴洛克团花_Baroque_Medallion"]` **全部丢弃** → **零语义掩模**
+   → 产物退化为「底板+残层+2 工艺层」（4 层）→ 内容全丢、⑤ RMSE 40.31。
+   **已修**：清空全部产出时打印明确告警（白名单内容 + 根因 + 处置 + 不得放宽阈值）。
+   **产物字节不变**（SHA `666de161…`，实测），未破坏可复现性。
+
+处置待定：A 转 DESIGN 线（如实标注素材前提）/ B 换真正可平铺素材 /
+C 新增「壁布样品照」独立 preset。**任何方案下都不得放宽 ④/⑤ 阈值。**
+
+**审计量测缺陷批次（2026-09-16 第二轮，`tools/audit_psb.py`）**
+
+排查上节「④ 假通过」时发现更深一层的量测缺陷——**其影响面比 ④ 本身更大**：
+
+| 缺陷 | 根因 | 影响 | 修复 |
+| :--- | :--- | :--- | :--- |
+| **`_alpha` 取错通道** ★ | `psd_tools` 的 `layer.numpy()` 通道数随模式变化：RGB→(H,W,**4**) Alpha 在 index 3；CMYK→(H,W,**5**)=C,M,Y,K,Alpha 在 index **4**。旧代码写死 `a[:, :, 3]`，在 CMYK 上取到 **K 通道** | ICC 分色后 K 呈色恒 1.0 → 掩码全判「全画布」→ **②③④⑥ 四维全错**。实测 union 修复前**恒 100%**，修复后 38.1/63.77/69.95%；**RGB（design 线）完全不受影响** | 按通道数取 alpha（`>=5`→4，`==4`→3，`<4`→全 1） |
+| ④/⑥ 的 CMYK→RGB 基准错位 | ④ 用 `ba[:, :, :3]`，在 CMYK 层上把 **C,M,Y 当成 R,G,B** 与源图比对 | 「底板 vs 源图」差异定位失真 | 新增 `_layer_rgb`：psd_tools 对 CMYK 返回**呈色**（=1−墨量），故 `R=v0*v3, G=v1*v3, B=v2*v3` |
+| ④ 的 union 含加工层 | 加工层（冲孔/烫金/陷印/专色）整版施加、Alpha 天然全画布 | 任一加工层即把 union 撑到 100%，`lost` 恒 0 → **假通过** | 新增 `TH["process_names"]` 排除；披露 `carrier_layers` / `excluded_process_layers` |
+| allowlist 静默清空 | 白名单与 adaptive 覆盖后的类目不相交时产出 0 掩模，此前静默继续 | 生成垃圾产物且不被察觉 | 清空时打印明确告警（**行为未变**，产物字节一致） |
+
+> ⚠️ `⑦ plate 合规` 里的 `a[:, :, 3]` 是**有意**取 K 通道（真黑版判定），
+> 已收紧为 `shape[2] >= 5` 并加注释。**修改 `_alpha` 时不要连带改它。**
+>
+> ⚠️ `_layer_rgb` 的 CMYK 转换是**无 ICC 近似**，仅用于「底板 vs 源图」阈值 40 的粗判；
+> **⑤ 合成等价性必须走同一 ICC**，不受影响。
+>
+> 新增测试：`TestAlphaChannelLayout` / `TestLayerRgbConversion` /
+> `TestProcessLayersExcludedFromCarrier`（`tests/test_audit_psb.py`，共 +11 条）。
 
 ### 8.5 测试环境（重要）
 

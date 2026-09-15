@@ -50,11 +50,21 @@ TH = {
     # 支撑/装饰层：不参与「内容承载」统计（底板是承托、外框/折痕是装饰）
     # 2026-09-13：改为关键词口径（兼容 Gold_Base / Fabric_Base / Base_Ground / 中文名），
     # 否则新预设的 01_纯净画布底板_Base_Ground 会被误当内容层统计。
+    # 注：support_names 与 oracle_names 目前取值相同（历史遗留，二者曾计划分化），
+    #     oracle_names 是实际被 content 过滤使用的那一份；support_names 保留兼容。
     "support_names": ("Gold_Base", "Fabric_Base", "Base_Ground", "底板",
                       "Brocade_Outer_Frame", "Panel_Fold_Seams", "外框", "折痕"),
     # 内容层（含残层）：参与重复/承载统计
     "oracle_names": ("Gold_Base", "Fabric_Base", "Base_Ground", "底板",
                      "Brocade_Outer_Frame", "Panel_Fold_Seams", "外框", "折痕"),
+    # 印前加工层：整版施加，掩码天然覆盖全画布（如冲孔挂点、烫金陷印、专色版）。
+    # 2026-09-16：④ 内容承载的 union 必须排除它们——否则任一个「全画布加工层」
+    # 都会把 union 撑到 100%，使 lost 恒为 0，形成假通过。
+    # 实证：damask case 产物含 12_激光冲孔挂点（Alpha 覆盖 100%）与
+    # 13B_复古金专色（89.8%），修复前 ④ lost_ratio=0.0（假通过）；
+    # 排除加工层后为 0.1129（11.29%，正确判失败）。
+    "process_names": ("DieCut", "Perforations", "Foil", "Trap", "Spot",
+                      "冲孔", "烫金", "陷印", "专色"),
 }
 
 REGIONS = {
@@ -94,8 +104,54 @@ def _find_base_layer(layers, base_keywords=None):
 
 
 def _alpha(a: np.ndarray) -> np.ndarray:
-    al = a[:, :, 3].astype(np.float32)
+    """取图层的 Alpha 通道（自动识别通道布局）。
+
+    ⚠️ 关键修复（2026-09-16）：psd_tools 的 `layer.numpy()` 通道数随色彩模式变化：
+      - RGB 层  → (H, W, 4) = R, G, B, Alpha    → Alpha 在 index 3
+      - CMYK 层 → (H, W, 5) = C, M, Y, K, Alpha → Alpha 在 index **4**
+    此前写死 `a[:, :, 3]`，在 CMYK（PLATE 线）产物上取到的是 **K 通道**。
+    ICC 真分色后 K 在整幅上大面积非零（去墨重构的底板 K 恒为 1.0）→ 所有掩码
+    被判成「全画布」→ ② 分辨率真实性 / ③ 实例重复 / ④ 内容承载 / ⑥ 底板纯净度
+    全部基于错误掩码计算，④ 更是恒定为「零丢失」的假通过。
+
+    实测（outputs/adaptive-e2e-20260915-rerun/case-01..03）：
+      修复前 CMYK 产物 union 恒为 100.0%；修复后 63.77%（金地）/ 69.95%（商用）。
+      RGB（design 线）产物不受影响——4 通道下 index 3 本就是 Alpha，
+      这正是此前「只有 PLATE 线样本问题多」的原因。
+    """
+    if a.ndim != 3 or a.shape[2] < 4:
+        return np.ones(a.shape[:2], np.float32)
+    idx = 4 if a.shape[2] >= 5 else 3
+    al = a[:, :, idx].astype(np.float32)
     return al / 255.0 if al.max() > 1.001 else al
+
+
+def _layer_rgb(ly) -> np.ndarray:
+    """把图层像素归一为 0..255 的 RGB 数组（用于与源图 RGB 比对）。
+
+    psd_tools 的 `numpy()` 对 CMYK 层返回 (H, W, 5) = C, M, Y, K, Alpha，
+    但取值语义是**呈色**（= 1 - 墨量），实测：象牙底板 C=.961 M=.910
+    Y=.829 K=1.000（K=1.0 表示 0% 黑版）。因此转 RGB 直接用乘法：
+        R = (1-墨量C) * (1-墨量K) = v0 * v3
+        G = v1 * v3,  B = v2 * v3
+    此前 ④ 直接用 `ba[:, :, :3]`，在 CMYK 产物上把 **C,M,Y 当成了 R,G,B** 与源图
+    比对，比较基准完全错位。
+
+    ⚠️ 注意：本函数做的是**无 ICC 的近似转换**，只用于「底板 vs 源图」的
+    差异定位（阈值 >40 的粗判），不用于 ⑤ 的合成等价性（那里必须走同一 ICC）。
+    返回的数组仅覆盖图层 bbox，调用方需自行补边到整画布。
+    """
+    a = ly.numpy()
+    if a.ndim != 3 or a.shape[2] < 3:
+        return np.zeros(a.shape[:2] + (3,), np.float32)
+    if a.shape[2] >= 5:
+        cmyk = a[..., :4].astype(np.float32)
+        k_keep = cmyk[..., 3]
+        return np.stack([cmyk[..., 0] * k_keep,
+                         cmyk[..., 1] * k_keep,
+                         cmyk[..., 2] * k_keep], -1) * 255.0
+    rgb = a[..., :3].astype(np.float32)
+    return rgb * 255.0 if rgb.max() <= 1.001 else rgb
 
 
 def _full_mask(ly, H: int, W: int) -> np.ndarray:
@@ -272,6 +328,9 @@ def audit(psb_path: str, manifest_path: str | None = None,
     #    口径（2026-09-12 校准）： 必须**包含残层**——「未分类墨迹残层」正是
     #    承载未成层内容的载体；把它排除会虚报内容丢失（实测 1.03% → 18.38%）。
     #    仅排除支撑/装饰层（底板/外框/折痕）。
+    #    2026-09-16 追加：**加工层（冲孔/烫金/陷印/专色）也必须排除**——它们整版
+    #    施加、Alpha 天然全画布，纳入 union 会把 union 撑到 100% 使 lost 恒为 0。
+    #    同时修掉 CMYK 产物上「C,M,Y 当 R,G,B」的比对基准错位（改用 _layer_rgb）。
     d = {"passed": True, "metrics": {}, "issues": []}
     if source_image and os.path.isfile(source_image):
         from engine.core.io_utils import imread_unicode
@@ -282,15 +341,29 @@ def audit(psb_path: str, manifest_path: str | None = None,
         ink = g16 < (np.median(g16) - 12)
         base_ly = _find_base_layer(layers)
         if base_ly is not None:
-            ba = base_ly.numpy()
-            base_rgb = (np.clip(ba[:, :, :3], 0, 1) * 255).astype(np.uint8) if ba.dtype != np.uint8 else ba[:, :, :3]
-            erased = np.abs(base_rgb.astype(np.int16) - src16.astype(np.int16)).max(axis=2) > 40
+            brgb = _layer_rgb(base_ly)
+            # 图层 numpy 只覆盖 bbox：补白到整画布后再与源图比对
+            bh, bw = brgb.shape[:2]
+            bx0, by0 = base_ly.bbox[0], base_ly.bbox[1]
+            bh, bw = min(bh, H - by0), min(bw, W - bx0)
+            canvas = np.full((H, W, 3), 255.0, np.float32)
+            canvas[by0:by0 + bh, bx0:bx0 + bw] = brgb[:bh, :bw]
+            erased = np.abs(canvas.astype(np.int16) - src16.astype(np.int16)).max(axis=2) > 40
             union = np.zeros((H, W), bool)
-            for m in masks.values():
+            carriers = []
+            for name_i, m in masks.items():
+                if any(p in name_i for p in TH["process_names"]):
+                    continue  # 加工层不是内容承载者
                 union |= m
+                carriers.append(name_i)
+            d["metrics"]["carrier_layers"] = len(carriers)
+            d["metrics"]["excluded_process_layers"] = len(masks) - len(carriers)
             lost = int((ink & erased & ~union).sum())
             total_ink = max(1, int(ink.sum()))
-            d["metrics"].update(ink_px=total_ink, lost_px=lost, lost_ratio=round(lost / total_ink, 6))
+            d["metrics"].update(ink_px=total_ink, lost_px=lost, lost_ratio=round(lost / total_ink, 6),
+                                erased_pct=round(100.0 * float(erased.mean()), 2),
+                                union_pct=round(100.0 * float(union.mean()), 2),
+                                ink_erased_pct=round(100.0 * float((ink & erased).sum()) / total_ink, 3))
             if lost / total_ink > TH["content_loss_ratio"]:
                 d["passed"] = False
                 d["issues"].append(f"内容丢失 {lost:,}px（{lost/total_ink*100:.3f}% 墨迹）")
@@ -343,9 +416,10 @@ def audit(psb_path: str, manifest_path: str | None = None,
             d["passed"] = False
             d["issues"].append("底板层几乎全透明（空层）")
         try:
-            bs = ba[::max(1, ba.shape[0] // 2000), ::max(1, ba.shape[1] // 4000), :3]
-            if ba.dtype != np.uint8:
-                bs = bs * 255.0
+            # 2026-09-16：改用 _layer_rgb 取呈色；此前 ba[:, :, :3] 在 CMYK 产物上
+            # 取到的是 C,M,Y（当成了 R,G,B），灰度换算基准错位。
+            brgb = _layer_rgb(base_ly)
+            bs = brgb[::max(1, brgb.shape[0] // 2000), ::max(1, brgb.shape[1] // 4000)]
             g = cv2.cvtColor(np.clip(bs, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
             med = float(np.median(g))
             dark_all = float((g < med - TH["base_dark_delta"]).mean()) * 100
@@ -389,10 +463,13 @@ def audit(psb_path: str, manifest_path: str | None = None,
                     f"PLATE 含生成内容（deocclusion_generative={gen_deoc}, "
                     f"generated_pixel_ratio={gen_ratio}）——制版线须为确定性输出")
         # 采样 K 版非空（真黑版判定：ICC 分色生效）
+        # ⚠️ 此处的 a[:, :, 3] 是**有意**取 K 通道，不是 Alpha（勿按 _alpha 的口径改）：
+        #    CMYK 层 numpy() = (H,W,5) = C,M,Y,K,Alpha，index 3 恰为 K。
+        #    本项仅在 is_cmyk 分支内执行，故 5 通道布局成立。
         try:
             big = max(content, key=lambda l: (l.bbox[2] - l.bbox[0]) * (l.bbox[3] - l.bbox[1]))
             a = big.numpy()
-            if a.shape[2] >= 4:
+            if a.shape[2] >= 5:
                 kt = a[:, :, 3].max()
                 norm = 255.0 if kt > 1.001 else 1.0
                 sub = a[::max(1, a.shape[0] // 300), ::max(1, a.shape[1] // 300)]
