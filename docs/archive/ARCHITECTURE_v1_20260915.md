@@ -224,9 +224,7 @@ pytoshop（经 codecs_accelerator 注入 imagecodecs SIMD PackBits）
 ### 8.4 测试基线（2026-09-15）
 
 引擎全量：**209 passed / 2 skipped**；WebUI：**34 passed**。
-专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。最新九样本隔离 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
-
-本次复测共 18 次运行，18 个 PSB 均生成，9/9 样本达到 cold/repeat 字节可复现，生产 DB 哈希未变化。8/18 次通过 8 维审计；水墨 3 张和油画的 repeat 均满足日志白名单命中及 episode `notes` 中 `cbr_reused=1`。CBR 命中案例的 Auto-Tune 结构化参数为空，因此只能确认案例命中与复用标记，不能宣称结构化参数已应用。绢本工笔两张仍因第 ④/⑤ 维真实质量指标失败，不进入 CBR。
+专项回归包含真实绢本工笔样本分类、类目字段桥接、episode 审计回填和 CBR 接线。九样本首轮 cold/repeat 结果见 `outputs/adaptive-e2e-20260915-final/results.json`；油画 preset 修复后的独立 cold/repeat 复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`，两次均通过 8 维审计。
 
 ### 8.5 测试环境（重要）
 

@@ -648,7 +648,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 - ✅ `pytest tests/test_adaptive_tree.py`（7 例全绿：插入父子 / 循环检测 / 三层链 / 祖先链×3 / inherit_priors 空表优雅跳过）
 - ✅ 迁移后 `SELECT COUNT(*) FROM categories WHERE parent_id IS NOT NULL` = **13**（≥10 达标）
 
-> **2026-09-15 状态覆核**：类目 `rename / delete / merge` 已完成真实实现；`delete` 为软删除，`merge` 处理同名 prompt 冲突。测试基线以引擎 `209 passed / 2 skipped`、WebUI `34 passed` 为准。真实绢本工笔分类回归通过；最新九样本隔离 cold/repeat 复测已完成，水墨 3 张和油画均通过 8 维审计且 repeat 命中 CBR，绢本工笔仍因第 ④/⑤ 维分层质量问题被严格拒绝。完整证据见 `outputs/adaptive-e2e-20260915-rerun/results.json` 和 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> **2026-09-15 状态覆核**：类目 `rename / delete / merge` 已完成真实实现；`delete` 为软删除，`merge` 处理同名 prompt 冲突。测试基线以引擎 `209 passed / 2 skipped`、WebUI `34 passed` 为准。真实绢本工笔分类回归通过；油画修复后 cold/repeat 审计通过，绢本分层质量问题仍待后续算法修复。
   - 总数 27（原 20 + 新增 8：1 根 + 7 二级）
   - path 正确计算，如 `/landscape_painting/distant_mountains/`
 
@@ -737,8 +737,7 @@ webui/frontend/src/App.tsx               # 集成人审弹窗 + 轮询（待做�
 
 > ⚠️ **测试数修正**：计划原定 CBR 3 例、类目树 4 例、主动学习 3 例；
 > 实际实现更充分，分别为 **7 / 7 / 7** 例（多出性能、持久化、边界情况等用例）。
-> 上述 **128 passed / 2 skipped** 是 Stage 5.2 完成时的历史基线，保留用于追溯；当前统一收口基线为引擎 **209 passed / 2 skipped**、WebUI **34 passed**。
-> 最新 9 样本隔离 cold/repeat 复测：18 次运行全部生成 PSB，9/9 字节可复现，8/18 严格审计通过；完整结果见 `outputs/adaptive-e2e-20260915-rerun/results.json`。
+> 引擎全量测试：基线 **128 passed / 2 skipped**（含 Stage 4 CBR 7 + Stage 5.1 树 7 + Stage 5.2 主动 7）。
 
 ### 7.2 集成测试（8 个）
 
