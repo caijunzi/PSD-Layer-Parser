@@ -79,6 +79,29 @@ class TestGoldScreenClassification(unittest.TestCase):
         fam, _ = classify_material_family(fp)
         self.assertEqual(fam, "绢本工笔")
 
+    def test_ming_ink_wash_is_ink_not_silk(self):
+        """明代写意山水（稀疏 + glcm 偏高）→ 宣纸水墨，**不得**判为绢本工笔。
+
+        实测 inputs/明代写意山水画创作.jpeg：中心 L84.3 b13.0 edge0.1229 glcm0.325。
+        关键：glcm 项须以 edge 稠密为前提（否则被误判绢本）。
+        """
+        fp = _fp(bg=(87.5, 0.0, 15.0), center=(84.3, 0.0, 13.0), sat=14.0, csat=14.1,
+                 edge=0.1229, glcm=0.325)
+        fam, _ = classify_material_family(fp)
+        self.assertEqual(fam, "宣纸水墨")
+
+    def test_oil_painting_is_oil_canvas(self):
+        """油画（高饱和 + 厚重笔触 + 低 GLCM）→ 油画布。
+
+        实测 inputs/油画.jpeg：中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159。
+        """
+        fp = _fp(bg=(63.9, 4.0, 16.0), center=(52.2, 7.0, 27.0), sat=27.0, csat=28.1,
+                 edge=0.241, glcm=0.159)
+        fam, _ = classify_material_family(fp)
+        self.assertEqual(fam, "油画布")
+        # 排除金地误判（b* 27 偏高，但饱和度/亮度组合应归油画）
+        self.assertNotEqual(fam, "金地屏风")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -136,9 +136,10 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
     """
     绢本工笔：米黄绢地 + 中亮度 + **细腻密集**（工笔）纹理。
 
-    中心区口径重标定（2026-09-15）。关键区分点：绢本/织物纹理更密
-    （edge_density ≥ 0.16 或 glcm ≥ 0.28），据此与写意水墨拉开差距。
-    ⚠️ 无绢本真值样本，阈值为保守估计；待补样本后再校。
+    中心区口径重标定（2026-09-15）。区分点：绢本/织物纹理**稠密**
+    （edge ≥ 0.16，且此时 glcm ≥ 0.28 再加权），据此与写意水墨拉开差距。
+    ⚠️ 仍无**绢本真值样本**（仅有织物 damask 作近邻参照：edge0.203/glcm0.337）；
+    阈值由"织物 vs 水墨"实测对比确定，待补绢本样本后再校。
     """
     score = 0.0
 
@@ -154,15 +155,18 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
     elif 58 < cL < 92:
         score += 0.10
 
-    # 细腻密集（工笔/织物）——须显著高于水墨
-    if edge_density >= 0.16:
+    # 细腻密集（工笔/织物）——须**显著**高于水墨；阈值由实测对比定：
+    #   织物 damask edge0.203/glcm0.337（稠密）vs 水墨 明代 edge0.123/glcm0.325（稀疏）
+    #   → 仅以 glcm 判定会把明代水墨误判为绢本，故 **glcm 项以 edge 稠密为前提**。
+    dense = edge_density >= 0.16
+    if dense:
         score += 0.30
     elif edge_density >= 0.12:
         score += 0.05
 
-    if glcm_energy >= 0.28:
+    if dense and glcm_energy >= 0.28:
         score += 0.30
-    elif glcm_energy >= 0.22:
+    elif dense and glcm_energy >= 0.22:
         score += 0.05
 
     return score
@@ -172,8 +176,9 @@ def _score_oil_canvas(cL: float, saturation: float, edge_density: float) -> floa
     """
     油画布：多样亮度 + 高饱和（> 25）+ 高边缘密度（厚重笔触）。
 
-    C3（2026-09-15）：统一到**中心区**口径（与其余三族一致）。
-    ⚠️ 无油画布真值样本，阈值为保守沿用（未重标定）；待补样本后再校。
+    C3（2026-09-15）：统一到**中心区**口径，并已用真值样本标定：
+    `inputs/油画.jpeg` 中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159
+    → 油画布 0.70 胜出（其余族 ≤0.50），与人工判断一致。
     """
     score = 0.0
 
