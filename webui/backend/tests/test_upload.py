@@ -81,8 +81,23 @@ class TestRecommendPreset(BaseWebUITest):
         self.assertEqual(name, "textile_damask_photo")
         self.assertGreaterEqual(conf, 0.8)
 
+    def test_real_wallcovering_recommends_photo_preset(self):
+        """真实工艺壁布（织物特写，无样块）→ 材质判别为「织物壁布」→ 走照片 preset。
+
+        不能按宽高比乱荐（2848×1600 ratio=1.78 会落到 japanese_screen_gold）。
+        """
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[3] / "inputs" / "工艺壁布-1.jpeg"
+        if not p.is_file():
+            self.skipTest("缺少 inputs/工艺壁布-1.jpeg")
+        from core.file_handler import _recommend_preset
+        name, conf = _recommend_preset({"width": 2848, "height": 1600}, str(p))
+        self.assertEqual(name, "textile_damask_photo",
+                         f"织物壁布应荐照片 preset，实际 {name}({conf})")
+        self.assertGreaterEqual(float(conf), 0.6)
+
     def test_fabric_closeup_falls_back_to_ratio(self):
-        """无样块的织物特写不得误判为样品照（避免把正常画面切成背景带+内容）。"""
+        """无样块的**非织物**图不得误判为样品照（避免把正常画面切成背景带+内容）。"""
         import numpy as np
         rng = np.random.default_rng(1)
         img = rng.integers(0, 255, (400, 600, 3)).astype(np.uint8)

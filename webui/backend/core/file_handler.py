@@ -122,17 +122,28 @@ def _recommend_preset(dimensions: Optional[dict],
             if root not in _sys.path:
                 _sys.path.insert(0, root)
             import cv2 as _cv2
+            from engine.core.io_utils import imread_unicode
             from engine.core.sample_panel import detect_sample_panel_bbox
 
-            img = _cv2.imread(str(image_path))
+            # 统一走 Unicode 安全读图（中文路径下 cv2.imread 会静默返回 None）
+            img = imread_unicode(str(image_path))
             if img is not None:
+                # ① 实体样块 → 壁布样品照 preset（最高置信）
                 gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
                 if detect_sample_panel_bbox(gray) is not None:
                     return "textile_damask_photo", 0.80
+
+                # ② 材质判别（指纹）：织物/壁布类实际照片（无样块，如绗缝面料特写）
+                #    → 同样走实物样品照 preset（不能按宽高比乱荐绘画 preset）。
+                from engine.adaptive.fingerprint import extract_fingerprint
+                from engine.adaptive.material_classifier import classify_material_family
+                family, conf = classify_material_family(extract_fingerprint(img))
+                if family == "织物壁布" and float(conf) >= 0.6:
+                    return "textile_damask_photo", round(float(conf), 2)
         except Exception as _e:
             # 检测不可用/失败 → 降级为宽高比判断，绝不影响上传；但**披露**原因，
-            # 避免"样品照没被识别"这种退化无声无息（P1-1 静默降级）。
-            print(f"[file_handler] 样块检测跳过，降级为宽高比推荐：{type(_e).__name__}: {_e}")
+            # 避免"样品照/织物没被识别"这种退化无声无息（P1-1 静默降级）。
+            print(f"[file_handler] 样块/材质检测跳过，降级为宽高比推荐：{type(_e).__name__}: {_e}")
 
     if not dimensions:
         return "japanese_screen_gold", 0.5

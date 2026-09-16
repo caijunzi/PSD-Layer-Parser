@@ -2,7 +2,12 @@
 材质家族判别模块
 
 基于指纹特征的规则判别（Stage 1）→ 后续可升级为 LightGBM（Stage 3）
-5 类：金地屏风 / 宣纸水墨 / 绢本工笔 / 油画布 / 其他
+6 类：金地屏风 / 宣纸水墨 / 绢本工笔 / 油画布 / 织物壁布 / 其他
+
+2026-09-16：新增「织物壁布」族 —— 此前无此族，`inputs/工艺壁布-*.jpeg`
+（深灰/浅灰绗缝织物）被强行塞进最接近的绘画族，实测全被误判为「宣纸水墨」，
+进而推荐到错误的 preset。织物（壁布/面料）的判据是**近中性**（见
+`_score_fabric_wallcovering`），与四种绘画基材正交。
 """
 import numpy as np
 from typing import Tuple, Dict
@@ -36,12 +41,25 @@ def classify_material_family(fingerprint: Dict) -> Tuple[str, float]:
     edge_density = structure_feats["edge_density"]
     glcm_energy = texture_feats["glcm_energy"]
 
+    # LBP 直方图熵：判「纹理是否**有结构**」——真实织物/绘画 ≥2，
+    # 噪声与纯色 ≈0.8~1.4（局部二值模式几乎只有一个值）。仅织物族使用，不改指纹向量。
+    lbp_entropy = None
+    try:
+        _lbp = np.asarray(texture_feats.get("lbp_hist"), dtype=np.float64)
+        if _lbp.size:
+            _p = _lbp / (_lbp.sum() + 1e-9)
+            lbp_entropy = float(-(_p * np.log(_p + 1e-12)).sum())
+    except Exception:
+        lbp_entropy = None
+
     # 规则判别（优先级从高到低）
     scores = {
         "金地屏风": _score_gold_screen(cL, ca, cb, csat, edge_density),
         "宣纸水墨": _score_ink_paper(cL, cb, csat, edge_density, glcm_energy),
         "绢本工笔": _score_silk_painting(cL, cb, csat, edge_density, glcm_energy),
         "油画布": _score_oil_canvas(cL, csat, edge_density),
+        "织物壁布": _score_fabric_wallcovering(cL, ca, cb, csat, edge_density,
+                                              lbp_entropy=lbp_entropy),
         "其他": 0.3,  # 兜底分数
     }
 
@@ -217,11 +235,62 @@ def _score_oil_canvas(cL: float, saturation: float, edge_density: float) -> floa
     return score
 
 
+def _score_fabric_wallcovering(cL: float, ca: float, cb: float,
+                               saturation: float, edge_density: float,
+                               lbp_entropy: float = None) -> float:
+    """织物壁布（工艺壁布 / 绗缝面料 / 面料实物照）：**近中性 + 有结构纹理**。
+
+    标定（2026-09-16，真值 `inputs/工艺壁布-1/2/3.jpeg` 中心区实测）：
+      -1 L45.9 a2.0 b7.0  sat7.1  edge0.133 LBP熵2.47
+      -2 L69.0 a1.0 b9.0  sat10.7 edge0.385 LBP熵2.18
+      -3 L84.3 a0.0 b5.0  sat7.0  edge0.098 LBP熵2.46
+    对照（同为"低彩"的绘画族，均被**合取门**挡在外）：
+      绢本-1 sat15.3 b16 ／ 水墨宋代 sat14.5 b15 ／ 金地 sat34.9 b38 ／ 油画 sat28.1 b27。
+
+    ⚠️ **两道门，缺一不可**（只靠"中性"会把噪声/纯色也判成织物，实测确如此）：
+      1. **近中性合取门**：`sat<15 且 b*<15`；
+      2. **结构门（LBP 熵 ≥ 2.0）**：真实织物的 LBP 分布有结构（实测 2.18~2.47），
+         而纯随机噪声 1.32、灰噪声 1.36、平滑纯色 0.76 —— 这些必须排除。
+    亮度**不作判据**（织物样本 L 跨 46~84）。
+    """
+    # 门 1：近中性合取（防止仅 sat 或仅 b* 单侧偏低而误判）
+    if not (saturation < 15.0 and cb < 15.0):
+        return 0.0
+    # 门 2：结构门（排除噪声/纯色等无结构纹理）
+    if lbp_entropy is not None and lbp_entropy < 2.0:
+        return 0.0
+
+    score = 0.0
+    # 低饱和（织物多无彩/低彩）
+    if saturation < 8:
+        score += 0.40
+    elif saturation < 12:
+        score += 0.25
+    else:
+        score += 0.05
+    # 低 b*（排除暖黄绢地/纸地与金色）
+    if cb < 8:
+        score += 0.35
+    elif cb < 12:
+        score += 0.20
+    else:
+        score += 0.05
+    # 织物结构（拼接/绗缝线带来中高边缘密度）
+    if edge_density >= 0.12:
+        score += 0.20
+    elif edge_density >= 0.08:
+        score += 0.10
+    # a* 近中性
+    if abs(ca) < 6:
+        score += 0.10
+    return max(0.0, score)
+
+
 def get_material_families() -> list:
     """
     返回支持的材质家族列表
     """
-    return ["金地屏风", "宣纸水墨", "绢本工笔", "油画布", "其他"]
+    return ["金地屏风", "宣纸水墨", "绢本工笔", "油画布", "织物壁布", "其他"]
 
 
 def explain_classification(fingerprint: Dict, family_name: str, confidence: float) -> str:
@@ -264,6 +333,11 @@ def explain_classification(fingerprint: Dict, family_name: str, confidence: floa
     elif family_name == "油画布":
         explanation += f"  - 高饱和度（> 25）✓\n" if saturation > 30 else f"  - 高饱和度（> 25）✗\n"
         explanation += f"  - 厚重笔触✓\n" if edge_density > 0.08 else f"  - 厚重笔触✗\n"
+    elif family_name == "织物壁布":
+        explanation += f"  - 近中性合取门（饱和<15 且 b*<15）✓\n"
+        explanation += f"  - 低饱和度（< 12）✓\n" if saturation < 12 else f"  - 低饱和度（< 12）✗\n"
+        explanation += f"  - 低 b*（< 12）✓\n" if bg_b < 12 else f"  - 低 b*（< 12）✗\n"
+        explanation += f"  - 织物结构（edge ≥ 0.08）✓\n" if edge_density >= 0.08 else f"  - 织物结构（edge ≥ 0.08）✗\n"
     else:
         explanation += f"  - 未匹配任何特定材质，归入兜底类\n"
 
