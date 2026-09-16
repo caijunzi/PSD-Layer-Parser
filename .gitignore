@@ -37,3 +37,6 @@ Thumbs.db
 # ---- WebUI 运行时（2026-09-11 追加）----
 webui/frontend/node_modules/
 webui/data/
+# 前端构建产物与 vite 临时文件（2026-09-16 追加：`npm run build` 产物不应入库）
+webui/frontend/dist/
+webui/frontend/vite.config.ts.timestamp-*.mjs

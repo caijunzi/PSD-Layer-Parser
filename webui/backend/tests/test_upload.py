@@ -51,3 +51,51 @@ class TestUpload(BaseWebUITest):
             files={"file": ("big.png", big, "image/png")},
         )
         self.assertEqual(r.status_code, 400)
+
+
+class TestRecommendPreset(BaseWebUITest):
+    """preset 推荐（2026-09-16 增强）：先判实物样品照，再按宽高比粗判。
+
+    样品照的宽高比任意（实测 1536×1024 = 1.5），纯按比例会误荐 japanese_screen_gold；
+    故必须先跑 `engine.core.sample_panel` 的样块检测。
+    """
+
+    @staticmethod
+    def _write(arr, name):
+        import os
+        import tempfile
+        import cv2
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, name)
+        cv2.imwrite(p, arr)
+        return p
+
+    def test_synthetic_sample_panel_recommends_photo_preset(self):
+        import numpy as np
+        rng = np.random.default_rng(0)
+        img = np.clip(100 + rng.normal(0, 2, (400, 600, 3)), 0, 255).astype(np.uint8)
+        img[60:340, 90:510] = np.clip(180 + rng.normal(0, 2, (280, 420, 3)), 0, 255).astype(np.uint8)
+        p = self._write(img, "syn_panel.png")
+        from core.file_handler import _recommend_preset
+        name, conf = _recommend_preset({"width": 600, "height": 400}, p)
+        self.assertEqual(name, "textile_damask_photo")
+        self.assertGreaterEqual(conf, 0.8)
+
+    def test_fabric_closeup_falls_back_to_ratio(self):
+        """无样块的织物特写不得误判为样品照（避免把正常画面切成背景带+内容）。"""
+        import numpy as np
+        rng = np.random.default_rng(1)
+        img = rng.integers(0, 255, (400, 600, 3)).astype(np.uint8)
+        p = self._write(img, "noise.png")
+        from core.file_handler import _recommend_preset
+        name, _ = _recommend_preset({"width": 600, "height": 400}, p)
+        self.assertNotEqual(name, "textile_damask_photo")
+
+    def test_ratio_fallbacks_unchanged(self):
+        from core.file_handler import _recommend_preset
+        self.assertEqual(_recommend_preset({"width": 4000, "height": 1952})[0], "japanese_screen_gold")
+        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000})[0], "textile_damask")
+        self.assertEqual(_recommend_preset(None)[0], "japanese_screen_gold")
+        # 不存在的路径 → 安全降级
+        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000}, "/no/such.png")[0],
+                         "textile_damask")

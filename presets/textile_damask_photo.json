@@ -32,6 +32,17 @@
 
     "print_condition": "iso_uncoated",
 
+    "icc_path": "profiles/CoatedFOGRA39.icc",
+    "icc_comment": "PLATE 线必须走 ICC 真分色才有黑版（朴素转换 K≡0，无黑版）。此前本 preset 未配 icc_path → K 通道空；2026-09-16 补齐（与 japanese_screen_gold 一致）。",
+
+    "black_generation": {
+        "enabled": true,
+        "k_gain": 1.1,
+        "k_gamma": 1.0,
+        "k_shift_pct": 0.0,
+        "comment": "2026-09-16 按品类标定（tools/calibrate_black_generation.py）：k_gain=1.1 时 K 非空 70.4%→78.1%、低频 RMSE 0.910→0.776（改善）、TAC_max 256→245 三项同优；增益 ≥1.2 起保真恶化，故取 1.1"
+    },
+
     "ai_semantic_classes": [
         {
             "name": "03_金箔卷草纹样_Gold_Filigree_Motif",

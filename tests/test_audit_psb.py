@@ -253,6 +253,35 @@ class TestBaseLayerNotHardcodedGold(unittest.TestCase):
         self.assertIn("Base_Ground", DEFAULT_BASE_KEYWORDS)
 
 
+class TestBlackPlateMetric(unittest.TestCase):
+    """⑦ k_channel_nonzero_pct 口径修复（2026-09-16）。
+
+    旧口径 `sub[:, :, 3] > 0.1 * norm` 判的是「K 呈色大于 10%」——psd_tools 对 CMYK
+    返回**呈色**（=1-墨量），故该式在 K 全空（呈色=1）与 K 有墨时**都**接近 100%，
+    真黑版判定形同虚设（实测无 ICC / 有 ICC 产物同为 100.0）。
+    正确口径：K 版非空 = 存在黑墨 = 呈色 < 1。
+    """
+
+    def test_metric_counts_ink_presence(self):
+        import inspect
+        from tools import audit_psb
+        src = inspect.getsource(audit_psb)
+        # 只检查「赋值那一行」的口径，避免被注释/文档字符串误伤
+        assign = [l for l in src.splitlines()
+                  if "k_channel_nonzero_pct" in l and 'd["metrics"]' in l and "=" in l]
+        self.assertTrue(assign, "未找到 k_channel_nonzero_pct 赋值行")
+        self.assertIn("kk < 0.999", assign[0], "必须基于「存在黑墨（呈色<1）」")
+        self.assertNotIn("> 0.1", assign[0], "禁止回退到旧口径（恒 ~100%）")
+
+    def test_metric_semantics_on_synthetic(self):
+        # 模拟 psd_tools 呈色：K 全空 = 呈色 1.0 → 非空占比 0%；半幅有墨 → 50%
+        empty = np.ones((10, 10), np.float32)
+        self.assertAlmostEqual(float((empty < 0.999).mean()) * 100, 0.0, places=3)
+        half = np.ones((10, 10), np.float32)
+        half[:5] = 0.7
+        self.assertAlmostEqual(float((half < 0.999).mean()) * 100, 50.0, places=3)
+
+
 class TestSharedLayerIoSingleSource(unittest.TestCase):
     """2026-09-16 根因修复：所有 PSD 层读取必须收敛到单一权威入口
     `engine.core.psd_layer_io`，杜绝散落的 `[:, :, 3]` / `[:, :, :3]` 索引假设。

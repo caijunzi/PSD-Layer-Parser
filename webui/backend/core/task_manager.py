@@ -44,6 +44,7 @@ PYTHON_BIN = _resolve_python_bin()
 PRESET_ESTIMATE = {
     "japanese_screen_gold": 250,
     "textile_damask": 80,
+    "textile_damask_photo": 150,
     "chinese_ink_landscape_ai": 230,
     "western_oil_painting": 220,
     "traditional_chinese_ink": 230,

@@ -27,6 +27,8 @@ from engine.core.sample_panel import (  # noqa: E402
 )
 
 DAMASK = ROOT / "inputs" / "damask_sample.png"
+#: 壁布织物特写照（2026-09-16 新增样本集）：非平板样块，不得误检样块
+WALLCOVERING = sorted((ROOT / "inputs").glob("工艺壁布-*.jpeg"))
 
 
 def _smooth_panel(h=400, w=600, top=60, bottom=340, left=90, right=510, seed=0):
@@ -76,6 +78,31 @@ class TestDetectSamplePanelRealPhoto(unittest.TestCase):
         roi = resolve_sample_panel_roi(self.img, {"enabled": True})
         self.assertIsNotNone(roi)
         self.assertEqual(roi.shape, self.gray.shape)
+
+
+class TestSamplePanelOnWallcoveringPhotos(unittest.TestCase):
+    """壁布织物特写照（`inputs/工艺壁布-*.jpeg`）：不得产生**假阳性**样块。
+
+    这类图是斜拍/卷边的织物特写，没有"平板样块 + 外部背景"结构；
+    若误检为样块，会把正常画面切成"背景带 + 内容"，破坏产物。
+    """
+
+    def test_fabric_closeup_no_false_panel(self):
+        if not WALLCOVERING:
+            self.skipTest("缺少 inputs/工艺壁布-*.jpeg")
+        import cv2
+        from engine.core.io_utils import imread_unicode
+        checked = 0
+        for p in WALLCOVERING:
+            img = imread_unicode(str(p))
+            if img is None:
+                continue
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            self.assertIsNone(detect_sample_panel_bbox(gray),
+                              f"{p.name} 是织物特写照，不应误检为样块")
+            checked += 1
+        if checked == 0:
+            self.skipTest("工艺壁布样本读取失败")
 
 
 class TestDetectSamplePanelSynthetic(unittest.TestCase):

@@ -7,5 +7,8 @@
     "detect_calligraphy": true,
     "detect_water_ripples": true,
     "deocclusion_radius": 7,
-    "super_res_scale": 4.0
+    "super_res_scale": 4.0,
+    "icc_path": "profiles/CoatedFOGRA39.icc",
+    "print_condition": "eci_coated_practice",
+    "icc_comment": "2026-09-16 补齐：PLATE 模式（--mode plate）下 ICC 驱动分色才有黑版；DESIGN 模式不使用。"
 }

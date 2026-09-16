@@ -30,6 +30,7 @@ from pytoshop import enums
 from engine.codecs_accelerator import install_psb_codec_accelerator
 from engine.core.color_manager import ColorManager
 from engine.core.ink_limiter import INK_MAX, limit_ink
+from engine.core.black_generation import apply_black_generation
 from engine.core.models import LayerDescriptor, ProcessingContext
 from engine.core.psd_compiler import PsdCompiler
 
@@ -41,7 +42,7 @@ class UniversalPSBBuilder:
 
     def __init__(self, target_w=16000, target_h=7808, dpi=150.0,
                  compression=enums.Compression.rle, color_mode="rgb",
-                 icc_path=None, tac_policy=None):
+                 icc_path=None, tac_policy=None, black_gen=None):
         install_psb_codec_accelerator()
         self.target_w = target_w
         self.target_h = target_h
@@ -54,10 +55,14 @@ class UniversalPSBBuilder:
         self.icc_path = icc_path
         #: TAC 工艺策略（上限来自印刷条件，不是 ICC —— ICC 里没有该字段）
         self.tac_policy = tac_policy
+        #: 黑版生成策略（按品类调优 K↔CMY 的灰量分配；None/恒等 = 不改动）
+        self.black_gen = black_gen
         #: 最近一次写盘的 TAC 审计结果 (max_pct, mean_pct)
         self.last_tac = None
         #: 最近一次写盘的详细油墨统计（供 manifest 披露）
         self.last_ink_stats = None
+        #: 最近一次写盘的黑版生成统计（供 manifest 披露）
+        self.last_black_gen_stats = None
         #: 内核回填的质检指标
         self.last_qa: dict = {}
 
@@ -74,6 +79,11 @@ class UniversalPSBBuilder:
         统一用同一 policy 压制可保证各层墨量一致、可复算。
         """
         raw = ColorManager.bgr_to_cmyk_raw(bgr, icc_path=self.icc_path)
+        # 黑版生成曲线（GCR 按品类调优）：ICC 分色后、TAC 压制前。
+        # None / 恒等策略 → 零拷贝返回，未配置的品类产物字节不变（RK-16）。
+        if self.black_gen is not None:
+            raw, _bg_stats = apply_black_generation(raw, self.black_gen, inplace=True)
+            self.last_black_gen_stats = _bg_stats
         if self.tac_policy is not None:
             # inplace=True：转换产物用完即弃，可安全原地修改（16K 下省一次 500MB 复制）
             raw, stats = limit_ink(raw, self.tac_policy, inplace=True)

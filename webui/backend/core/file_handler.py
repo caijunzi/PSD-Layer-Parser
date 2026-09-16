@@ -70,8 +70,8 @@ def save_upload(src_path: str, original_name: str) -> dict:
     if ext in (".jpg", ".jpeg", ".png"):
         thumbnail_url = _make_thumbnail(stored_path, file_id)
 
-    # 智能 preset 推荐（MVP：按宽高比粗判）
-    rec_preset, confidence = _recommend_preset(dimensions)
+    # 智能 preset 推荐（先判实物样品照，再按宽高比粗判品类）
+    rec_preset, confidence = _recommend_preset(dimensions, str(stored_path))
 
     return {
         "file_id": file_id,
@@ -100,14 +100,38 @@ def _make_thumbnail(src_path: Path, file_id: str) -> str:
         return None
 
 
-def _recommend_preset(dimensions: Optional[dict]) -> tuple[str, float]:
-    """MVP 智能推荐：按宽高比粗判品类。
+def _recommend_preset(dimensions: Optional[dict],
+                      image_path: Optional[str] = None) -> tuple[str, float]:
+    """MVP 智能推荐：先判「实物样品照」，再按宽高比粗判品类。
 
+    - **检出实体样块**（照片中一块凸起的实物）→ `textile_damask_photo`（壁布/面料样品照）
+      复用 `engine/core/sample_panel` 的零硬编码样块检测（长直边持续性）。
+      必须先判：样品照的宽高比可能是任意值，纯按比例会误荐屏风/纹样 preset。
     - 宽高比 ≈ 2:1（横向长卷/屏风）→ japanese_screen_gold
     - 接近 1:1（方阵纹样）→ textile_damask
     - 其余 → japanese_screen_gold（默认）
-    返回 (preset_name, confidence)
+
+    返回 (preset_name, confidence)。检测失败一律安全降级为宽高比判断。
     """
+    if image_path:
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+
+            root = str(_Path(__file__).resolve().parents[3])   # 项目根
+            if root not in _sys.path:
+                _sys.path.insert(0, root)
+            import cv2 as _cv2
+            from engine.core.sample_panel import detect_sample_panel_bbox
+
+            img = _cv2.imread(str(image_path))
+            if img is not None:
+                gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+                if detect_sample_panel_bbox(gray) is not None:
+                    return "textile_damask_photo", 0.80
+        except Exception:
+            pass  # 检测不可用/失败 → 降级为宽高比判断，绝不影响上传
+
     if not dimensions:
         return "japanese_screen_gold", 0.5
     w, h = dimensions["width"], dimensions["height"]

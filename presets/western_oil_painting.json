@@ -8,6 +8,9 @@
         "mode": "design",
         "color_mode": "rgb"
     },
+    "icc_path": "profiles/CoatedFOGRA39.icc",
+    "print_condition": "eci_coated_practice",
+    "icc_comment": "2026-09-16 补齐：默认 DESIGN（RGB）不使用；以 --mode plate 跑制版线时用于 ICC 分色（否则 K≡0 无真黑版）。",
     "dpi": 150.0,
     "bg_layer_name": "01_天空或远景地面底板_Sky_Distant_Ground_Base_Ground",
     "background_mode": "sky_or_distant_ground",

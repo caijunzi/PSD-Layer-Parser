@@ -429,7 +429,15 @@ def audit(psb_path: str, manifest_path: str | None = None,
                 kt = a[:, :, 3].max()
                 norm = 255.0 if kt > 1.001 else 1.0
                 sub = a[::max(1, a.shape[0] // 300), ::max(1, a.shape[1] // 300)]
-                d["metrics"]["k_channel_nonzero_pct"] = round(float((sub[:, :, 3] > 0.1 * norm).mean()) * 100, 1)
+                # psd_tools 对 CMYK 返回的是**呈色**（= 1 - 墨量）：K 呈色=1 → 0% 黑墨。
+                # 「K 版非空」= 存在黑墨 = 呈色 < 1。
+                # ⚠️ 2026-09-16 修复：旧口径写的是 `> 0.1 * norm`（呈色大于 10%），
+                #    恒为 ~100% —— 连「K 全空（未走 ICC 分色）」的产物也判 100%，
+                #    真黑版判定形同虚设（实测无 ICC 产物与有 ICC 产物同为 100.0）。
+                kk = sub[:, :, 3].astype(np.float32) / norm
+                d["metrics"]["k_channel_nonzero_pct"] = round(float((kk < 0.999).mean()) * 100, 1)
+                d["metrics"]["k_channel_strong_pct"] = round(float((kk < 0.5).mean()) * 100, 1)
+                d["metrics"]["k_ink_mean_pct"] = round(float((1.0 - kk).mean()) * 100, 2)
         except Exception:
             pass
     else:

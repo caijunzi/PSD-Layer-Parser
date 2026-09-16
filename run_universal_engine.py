@@ -1117,8 +1117,10 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     icc_path = icc_override or preset.get("icc_path")
     tac_policy = None
     icc_info = None
+    black_gen = None
     if is_plate:
         from engine.core.ink_limiter import icc_summary, resolve_policy
+        from engine.core.black_generation import resolve_black_generation
         icc_info = icc_summary(icc_path)
         tac_policy = resolve_policy(
             condition=preset.get("print_condition"),
@@ -1126,14 +1128,22 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
             max_k_pct=preset.get("max_k_pct"),
             icc_path=icc_path,
         )
+        # 黑版生成曲线（GCR 按品类调优）：preset.black_generation；未配置 = 恒等 = 用 ICC 默认黑版
+        black_gen = resolve_black_generation(preset.get("black_generation"))
         print(f"  -> [Prepress] ICC: {icc_info.get('description') or '未提供（朴素 RGB→CMYK 转换，无色彩管理）'}")
         print(f"  -> [Prepress] TAC 上限 {tac_policy.limit_pct:.0f}% / MaxK {tac_policy.max_k_pct:.0f}%"
               f"  来源: {tac_policy.source}")
+        if black_gen.is_identity:
+            print("  -> [Prepress] 黑版生成曲线: 恒等（未配置 black_generation，沿用 ICC 内建黑版）")
+        else:
+            print(f"  -> [Prepress] 黑版生成曲线（按品类调优）: k_gain={black_gen.k_gain} "
+                  f"k_gamma={black_gen.k_gamma} k_shift_pct={black_gen.k_shift_pct}"
+                  f"  来源: {black_gen.source}")
 
     builder = UniversalPSBBuilder(
         target_w=out_w, target_h=out_h, dpi=target_dpi,
         compression=enums.Compression.rle, color_mode=ps_color_mode,
-        icc_path=icc_path, tac_policy=tac_policy,
+        icc_path=icc_path, tac_policy=tac_policy, black_gen=black_gen,
     )
     builder.build_psb(output_path, src_hr, bg_hr, sorted_layers, hr_masks_dict, bg_layer_name=bg_name)
     t_step6 = time.time() - t0
@@ -1242,6 +1252,13 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     ink_stats = getattr(builder, "last_ink_stats", None)
     if ink_stats:
         man.totals["ink_compliance"] = ink_stats
+    # 黑版生成曲线披露（R1 指标诚实）：无论是否启用都写明，避免"配置了却看不出"
+    bg_stats = getattr(builder, "last_black_gen_stats", None)
+    if bg_stats is None and black_gen is not None:
+        bg_stats = {"black_gen_applied": False, "source": black_gen.source,
+                    "note": "恒等策略（未配置 black_generation）"}
+    if bg_stats:
+        man.totals["black_generation"] = bg_stats
     if icc_info is not None:
         man.totals["color_management"] = icc_info
     if semantic_coverage:

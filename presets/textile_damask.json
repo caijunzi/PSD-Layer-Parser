@@ -7,6 +7,8 @@
         "mode": "plate",
         "color_mode": "cmyk"
     },
+    "icc_path": "profiles/CoatedFOGRA39.icc",
+    "icc_comment": "2026-09-16 补齐（关键）：本 preset 默认就是 PLATE 线，此前缺 icc_path → 一直走朴素 RGB→CMYK，K≡0、无真黑版。补齐后 ICC 驱动分色生效。",
     "dpi": 150.0,
     "bg_layer_name": "01_象牙织物底板_Ivory_Fabric_Base",
     "background_mode": "fabric_substrate",
