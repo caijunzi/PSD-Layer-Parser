@@ -58,7 +58,7 @@ EXCEPT_PASS_ALLOWLIST: dict[tuple[str, int], str] = {
     ("engine/schemas/preset_schema.py", 154): "pydantic 未安装 → 手工校验已覆盖主要项",
     ("webui/backend/api/upload.py", 41): "临时文件清理失败 → 紧随其后 raise HTTPException",
     ("webui/backend/core/background_learner.py", 375): "reset 时删除任务文件失败（幂等操作）",
-    ("webui/backend/ws/progress.py", 44): "WebSocket 客户端断开（正常控制流）",
+    ("webui/backend/ws/progress.py", 47): "WebSocket 客户端断开（正常控制流）",
     ("run_universal_engine.py", 361): "torch 未安装 → 跳过随机种子（可选依赖）",
 }
 
