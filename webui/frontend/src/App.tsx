@@ -423,7 +423,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      <main className={"mx-auto max-w-6xl space-y-6 px-6 py-8" + (ready && !busy ? " pb-28" : "")}>
         {/* 步骤条 */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {[
@@ -715,17 +715,25 @@ export default function App() {
           </>
         )}
 
-        {/* 开始处理按钮 */}
-        {ready && (
-          <div className="flex items-center justify-end gap-3">
-            {!selectedPreset && <span className="text-xs text-neutral-500">请先选择 Preset</span>}
-            <button
-              onClick={() => void startProcess()}
-              disabled={!selectedPreset}
-              className="rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 px-8 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5 hover:shadow-blue-500/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
-            >
-              开始处理 →
-            </button>
+        {/* 开始处理：吸底操作栏（2026-09-16）——短视口下按钮此前在首屏外
+            （视口 568px vs 页面 1735px），需滚动才能提交；改为 fixed 底栏后恒可达 */}
+        {ready && !busy && (
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t border-neutral-800 bg-neutral-900/90 backdrop-blur">
+            <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
+              <span className="truncate text-xs text-neutral-400">
+                {selectedPreset
+                  ? <>Preset：<b className="text-neutral-200">{selectedPreset}</b>
+                    · {MODE_LABELS[mode]} · {scale.toFixed(1)}× · {dpi} PPI</>
+                  : "请先选择 Preset"}
+              </span>
+              <button
+                onClick={() => void startProcess()}
+                disabled={!selectedPreset}
+                className="shrink-0 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 px-8 py-2.5 text-sm font-bold text-white shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5 hover:shadow-blue-500/50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0"
+              >
+                开始处理 →
+              </button>
+            </div>
           </div>
         )}
 
@@ -989,6 +997,34 @@ export default function App() {
                       >
                         {h.status}
                       </span>
+                      {h.status === 'completed' && (
+                        <span className="flex items-center gap-2">
+                          {(h.mode === 'both' ? ['plate', 'design'] : [h.mode]).map((ft) => (
+                            <a
+                              key={ft}
+                              href={`/api/download/${h.task_id}/${ft}`}
+                              download
+                              className="text-blue-400 transition-colors hover:text-blue-300 hover:underline"
+                            >
+                              PSB·{ft === 'plate' ? '制版' : '设计'}
+                            </a>
+                          ))}
+                          <a
+                            href={`/api/download/${h.task_id}/audit`}
+                            download
+                            className="text-neutral-400 transition-colors hover:text-neutral-200 hover:underline"
+                          >
+                            审计
+                          </a>
+                          <a
+                            href={`/api/download/${h.task_id}/manifest`}
+                            download
+                            className="text-neutral-400 transition-colors hover:text-neutral-200 hover:underline"
+                          >
+                            清单
+                          </a>
+                        </span>
+                      )}
                       {typeof h.elapsed_time === 'number' && (
                         <span className="text-neutral-600">{h.elapsed_time.toFixed(0)}s</span>
                       )}
