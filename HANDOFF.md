@@ -100,7 +100,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    原 `textile_damask` 面向**可平铺数码纹样**，**不用于实物样品照**（混用即 §9.2 C2 的失败）。
    ⚠️ §9.2 C2 曾记「壁布 ✅」，当时结论有误，以本条与 §10.4 为准。
 8. **提交状态**：2026-09-16 批次见 §10；提交前必跑两组全量测试
-   （当前引擎 **273 passed / 5 skipped** + WebUI **40 OK**）。
+   （当前引擎 **279 passed / 4 skipped** + WebUI **41 OK**）。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
 ## 9. 2026-09-15 P0–P2 修复批次（历史批次，最新请读 §10）
@@ -180,7 +180,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
 #        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
-py -m pytest tests/ -q                                        # 引擎 273 passed / 5 skipped
+py -m pytest tests/ -q                                        # 引擎 279 passed / 4 skipped
 py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 41 OK
 # ★ 提交前自检（一键，五道门；见 §8）
 py scripts/preflight.py            # 全量：解释器依赖 + 静默降级审计 + 行尾一致性 + 两组测试 + 前端 tsc
@@ -283,4 +283,4 @@ CBR 参数不自动注入生产（保护 RK-16）；`category_priors` 真实统�
   （`-m` 中的反引号会被当命令替换）。
 
 ### 10.7 当前测试基线
-引擎 **273 passed / 5 skipped**（5 skip 源于样本换代）；WebUI **40 OK**。提交 **未 push**。
+引擎 **279 passed / 4 skipped**（5 skip 源于样本换代）；WebUI **41 OK**。提交 **未 push**。
