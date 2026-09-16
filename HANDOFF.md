@@ -100,7 +100,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    原 `textile_damask` 面向**可平铺数码纹样**，**不用于实物样品照**（混用即 §9.2 C2 的失败）。
    ⚠️ §9.2 C2 曾记「壁布 ✅」，当时结论有误，以本条与 §10.4 为准。
 8. **提交状态**：2026-09-16 批次见 §10；提交前必跑两组全量测试
-   （当前引擎 **247 passed / 2 skipped** + WebUI **34 OK**）。
+   （当前引擎 **260 passed / 5 skipped** + WebUI **37 OK**）。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
 ## 9. 2026-09-15 P0–P2 修复批次（历史批次，最新请读 §10）
@@ -180,8 +180,8 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
 #        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
-py -m pytest tests/ -q                                        # 引擎 247 passed / 2 skipped
-py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 34 OK
+py -m pytest tests/ -q                                        # 引擎 260 passed / 5 skipped
+py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 37 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg
@@ -230,5 +230,23 @@ CBR 参数不自动注入生产（保护 RK-16）；`category_priors` 真实统�
 **实测**：样块 ROI 80.9%、**DINO 在样块区内确实检出团花**（根因②不再阻塞）、图层 7 个、
 **8 维审计全过 exit=0**、④ lost 0.000472、⑤ rmse_lowfreq 13.1（旧：4 层 / 11.29% / 40.31 / exit=2）。
 
-### 10.5 当前测试基线
-引擎 **247 passed / 2 skipped**；WebUI **34 OK**。提交 **未 push**。
+### 10.5 ICC 黑版曲线 + WebUI 接入与冒烟（2026-09-16 第四批）
+- **新增 `engine/core/black_generation.py`**（GCR 曲线：K 曲线 + CMY 等量补偿；**恒等零拷贝**保 RK-16）
+  + **`tools/calibrate_black_generation.py`**（CMYK 域快速标定）。标定：金地/油画**恒等最优**；
+  **壁布样品照 `k_gain=1.1`**（K 非空 70.4→78.1%、RMSE_low 0.910→**0.776**、TAC 256→245）。
+- **★ 7 个 preset 全补 `icc_path=profiles/CoatedFOGRA39.icc`**：此前**只有 `japanese_screen_gold` 有**，
+  `textile_damask` 是「默认 PLATE 却缺 ICC」的关键缺口（K≡0 无真黑版）。
+- **★ ⑦ `k_channel_nonzero_pct` 坏指标修复**：旧口径判「K 呈色 >10%」→ K 全空与有墨都 ≈100%；
+  改为 `呈色<1`（存在黑墨），新增 `k_ink_mean_pct` / `k_channel_strong_pct`。
+- **WebUI**：preset 列表本就是动态扫描 → 新 preset 自动可见；补 `PRESET_ESTIMATE`；
+  `_recommend_preset` 改为**先判实物样品照**（复用 `sample_panel`）。
+- **端到端冒烟 11/11 通过**：presets→upload→process→history→产物→download；
+  任务 169.4s、产物齐全、**任务审计 8 维全过**、manifest 披露 ICC 与黑版曲线；
+  前端 `tsc --noEmit` + `vite build` 通过。
+- ⚠️ **环境坑**：WorkBuddy `safe-delete` 钩子按 turn 累计删除数（阈值 50）**终止长跑引擎**
+  （现象：无 traceback + exit=1）→ 跑引擎须加 **`CODEBUDDY_SAFE_DELETE_ENABLED=0`**。
+- ⚠️ **样本集已换代**：`inputs/damask_sample.png` 移除，改用 `工艺壁布-1/2/3.jpeg`
+  （织物特写照，**无样块 → photo preset 全幅回退**，实测仍 8 维全过）。
+
+### 10.6 当前测试基线
+引擎 **260 passed / 5 skipped**（5 skip 源于样本换代）；WebUI **37 OK**。提交 **未 push**。

@@ -28,7 +28,7 @@
 > ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
 > ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
 >    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
-> 当前回归基线：引擎 **247 passed / 2 skipped**，WebUI **34 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布**实物样品照**新增 `textile_damask_photo` preset，8 维审计全过（旧 `textile_damask` 混用导致的三层根因已逐条处置，见下方"壁布 plate 残余项"）。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
+> 当前回归基线：引擎 **260 passed / 5 skipped**，WebUI **37 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布**实物样品照**新增 `textile_damask_photo` preset，8 维审计全过（旧 `textile_damask` 混用导致的三层根因已逐条处置，见下方"壁布 plate 残余项"）。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
 > 本轮新增自适应字段桥接、审计回填、CBR 冷启动闭环和真实样本回归；最新九样本隔离 cold/repeat 证据见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整分析见 `docs/测试报告_20260915_全样本自适应链路收口.md`。历史首轮证据仍保留在 `outputs/adaptive-e2e-20260915-final/results.json`，油画 preset 修复后的独立复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`。
 
 ---
@@ -87,7 +87,7 @@
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
 3. `inherit_priors()` 在 `category_priors` 为空时**优雅跳过**；有真实先验时才复制，不手写未经验证的 seed
 
-> 引擎全量测试基线已更新为 **247 passed / 2 skipped**；WebUI **34 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> 引擎全量测试基线已更新为 **260 passed / 5 skipped**；WebUI **37 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
 
 > **2026-09-16 修复批次（四项工程缺口）**：
 > ① **⑤ 合成等价性 CMYK 比对口径**：PLATE 产物是 ICC FOGRA39 真分色（有黑版），
@@ -297,7 +297,12 @@ python pipeline/06_verify_psb.py --file <psb>         # 印前结构校验
 全量披露）+ `<name>.masks/`（逐层重建区掩码 PNG）。**回灌制版线时必须读取掩码剔除生成内容**
 （§3.1 硬边界 1 的落地要求）。
 
-已知限制：封闭 5 类 preset 均已完成定义（屏风/水墨/烫金/油画已验证；**壁布新增
-`textile_damask_photo` 处理实物样品照，8 维审计全过**，原 `textile_damask` 仍面向可平铺数码纹样）；
-WebUI（G4）backend（6 个 API 模块 + WS 进度）与 frontend（React+Vite）均已实现，
-**待做的是端到端联调冒烟**（迄今只跑过 34 个单元测试）；ICC 黑版生成曲线按品类调优待做。
+已知限制：封闭 5 类 preset 均已完成定义（屏风/水墨/烫金/油画已验证；壁布新增
+`textile_damask_photo` 处理实物样品照，8 维审计全过；原 `textile_damask` 仍面向可平铺数码纹样）。
+**WebUI（G4）已通过端到端冒烟**（presets→upload→process→history→download 全链路 11/11 通过，
+前端 `tsc --noEmit` + `vite build` 通过）。**ICC 黑版生成曲线已按品类调优落地**
+（`engine/core/black_generation.py` + `tools/calibrate_black_generation.py`；**7 个 preset 均已补
+`icc_path`** —— 此前仅 `japanese_screen_gold` 有，其余 PLATE 跑批 K≡0 无真黑版）。
+遗留：`inputs/` 样本集已换代（原 `damask_sample.png` 移除，改用 `工艺壁布-1/2/3.jpeg` 织物特写照）；
+实测反馈：新样本被 `/api/upload` 推荐为 `japanese_screen_gold`（无样块 → 回落宽高比判断），
+如需按"工艺壁布"推荐可再扩启发式。
