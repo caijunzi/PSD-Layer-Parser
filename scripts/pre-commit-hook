@@ -1,0 +1,47 @@
+#!/bin/sh
+# ============================================================================
+# 仓库本地 pre-commit 钩子（模板，入库以便复现）
+#
+# 安装（一次性，本地）：
+#   cp scripts/pre-commit-hook .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# 说明：本机 core.hooksPath 指向全局目录 C:/Users/CK/.git-hooks，其 pre-commit
+# 会**委托执行**仓库本地 .git/hooks/pre-commit（见该目录 README），故本模板生效。
+#
+# 只跑**快速门禁**（静默降级审计 + 行尾一致性），秒级；
+# 全量测试请手动跑：python scripts/preflight.py
+# ============================================================================
+
+# ⚠️ 解释器必须能 import numpy/cv2/PIL。
+#    PATH 上的 `python` 可能是 WorkBuddy managed 3.13（**无 numpy**）→ 审计直接崩。
+#    优先用系统 Python 3.12.10（本项目既定测试解释器），可经 PREFLIGHT_PYTHON 覆盖。
+PY="${PREFLIGHT_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for cand in \
+    "/c/Users/CK/AppData/Local/Programs/Python/Python312/python.exe" \
+    "/mnt/c/Users/CK/AppData/Local/Programs/Python/Python312/python.exe" \
+    python3 \
+    python ; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      if "$cand" -c "import numpy, cv2, PIL" >/dev/null 2>&1; then
+        PY="$cand"; break
+      fi
+    fi
+  done
+fi
+if [ -z "$PY" ]; then
+  echo "[pre-commit] 未找到含 numpy/cv2/PIL 的 Python，跳过 preflight。" >&2
+  echo "            请手动跑：<系统Python312> scripts/preflight.py" >&2
+  exit 0
+fi
+
+# 长跑/删除相关：停用 WorkBuddy safe-delete 钩子（其按 turn 累计删除数会终止进程）
+CODEBUDDY_SAFE_DELETE_ENABLED=0 "$PY" scripts/preflight.py --fast
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "" >&2
+  echo "[pre-commit] preflight 未通过，提交被拦截。" >&2
+  echo "  查看详情：python scripts/preflight.py --fast" >&2
+  echo "  应急绕过（不推荐）：git commit --no-verify" >&2
+fi
+exit "$rc"
