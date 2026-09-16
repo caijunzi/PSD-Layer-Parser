@@ -218,6 +218,17 @@ def audit(psb_path: str, manifest_path: str | None = None,
     from psd_tools import PSDImage
     log = (lambda *a: print(*a, flush=True)) if verbose else (lambda *a: None)
 
+    # 审计基准（2026-09-16 像素级取证后修正）：引擎的 seam_harmonization 会**改写
+    # 实际输入**（循环纹样接缝对齐），run_pipeline 将有效输入持久化为
+    # <psb>.source_effective.png。存在时审计④⑤⑥一律以它为基准——否则会把对齐
+    # 改写误判为"内容丢失/合成偏差"（实测 ④ 随倍率虚高 2.8%@1x → 6.4%@4x）。
+    # 无该文件（preset 未启用 seam 对齐）时行为与历史完全一致。
+    _eff_src = (psb_path + ".source_effective.png") if isinstance(psb_path, str) else None
+    _used_effective = bool(_eff_src and os.path.isfile(_eff_src))
+    if _used_effective:
+        source_image = _eff_src
+        log(f"  [audit] 检测到有效源（seam 对齐后），审计基准切换: {_eff_src}")
+
     psd = PSDImage.open(psb_path)
     W, H = psd.size
     layers = list(psd)
@@ -225,6 +236,7 @@ def audit(psb_path: str, manifest_path: str | None = None,
     is_cmyk = int(psd.color_mode) == 4
     result: dict = {"psb": psb_path, "size": [W, H], "layer_count": len(layers),
                     "color_mode": "cmyk" if is_cmyk else "rgb",
+                    "source_effective": _used_effective,
                     "dims": {}, "issues": []}
     dims = result["dims"]
 
@@ -307,8 +319,21 @@ def audit(psb_path: str, manifest_path: str | None = None,
         import cv2
         src = cv2.cvtColor(imread_unicode(source_image), cv2.COLOR_BGR2RGB)
         src16 = cv2.resize(src, (W, H), interpolation=cv2.INTER_AREA)
-        g16 = cv2.cvtColor(src16, cv2.COLOR_RGB2GRAY)
-        ink = g16 < (np.median(g16) - 12)
+        # ④ ink 口径（2026-09-16 像素级取证后修正）：墨迹在**源图原生分辨率**上判定，
+        # 再按上/下采样方向重采样到产物分辨率（放大用最近邻、缩用 INTER_AREA）。
+        # 此前在 (W,H) 插值放大源上判定——插值把细线纹样展宽 ~scale² 倍，产生输入里
+        # 不存在的"墨迹"，LR 二值掩模管线结构性无法覆盖（实测 textile_damask@scale4
+        # lost 虚高至 6.41%，且 lost 100% 位于引擎 ink_all 之外；scale1 产物尺寸==源
+        # 尺寸时结果不变）。
+        src_gray_native = cv2.cvtColor(src, cv2.COLOR_RGB2GRAY)
+        _med = float(np.median(src_gray_native))
+        _ink_native = (src_gray_native < (_med - 12)).astype(np.uint8) * 255
+        if (W, H) == (_ink_native.shape[1], _ink_native.shape[0]):
+            ink = _ink_native > 0
+        elif W >= _ink_native.shape[1]:
+            ink = cv2.resize(_ink_native, (W, H), interpolation=cv2.INTER_NEAREST) > 0
+        else:
+            ink = cv2.resize(_ink_native, (W, H), interpolation=cv2.INTER_AREA) > 127
         base_ly = _find_base_layer(layers)
         if base_ly is not None:
             brgb = _layer_rgb(base_ly)

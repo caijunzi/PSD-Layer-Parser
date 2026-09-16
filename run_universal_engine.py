@@ -692,6 +692,16 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                 print(f"  -> [R3] 接缝流场对齐完成: "
                       f"pre_rmse={_seam_res.metrics.get('pre_seam_rmse')} → "
                       f"post_rmse={_seam_res.metrics.get('post_seam_rmse')}")
+                # 交付审计基准（2026-09-16 像素级取证后修正）：seam 对齐**改写了引擎
+                # 实际输入**，审计若仍比对原始源，会把对齐改写误判为"内容丢失"
+                # （实测可平铺纹样 ④ 随倍率虚高：2.8%@1x → 6.4%@4x，⑤ 亦被拖至阈值边）。
+                # 故将有效输入持久化为 <psb>.source_effective.png，audit_psb 自动优先采用。
+                try:
+                    _eff_path = str(output_path) + ".source_effective.png"
+                    cv2.imwrite(_eff_path, src_lr)
+                    print(f"  -> [R3] 有效源已持久化（交付审计基准）: {_eff_path}")
+                except Exception as _e:
+                    print(f"  -> [R3] 有效源持久化失败（审计将回退原始源）: {_e}")
             else:
                 print(f"  -> [R3] 接缝对齐跳过: {_seam_res.message}")
         except Exception as _e:
