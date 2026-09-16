@@ -69,9 +69,15 @@ def main() -> int:
     print("  恢复库最新提交:", out.strip()[:100])
     check(out.strip() == head, "恢复库 HEAD 与源一致（完整 SHA）")
 
-    # 清理临时恢复库（safe-delete 钩子已用环境变量停用）
-    shutil.rmtree(tmp, ignore_errors=True)
-    check(not os.path.isdir(tmp), "临时恢复库已清理")
+    # 清理临时恢复库（clone 后 Windows 可能有瞬时文件锁 → 重试）
+    gone = False
+    for _ in range(5):
+        shutil.rmtree(tmp, ignore_errors=True)
+        if not os.path.isdir(tmp):
+            gone = True
+            break
+        time.sleep(1)
+    check(gone, "临时恢复库已清理")
 
     print("\n" + "=" * 70)
     if fails:
