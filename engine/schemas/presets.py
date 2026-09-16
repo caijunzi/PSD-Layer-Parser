@@ -18,7 +18,13 @@ import json
 import os
 from typing import Any, Optional
 
-PRESETS_DIR = "presets"
+# 2026-09-17 修复：此前为 CWD 相对路径 "presets"。当进程 CWD 不在项目根目录时
+# （典型场景：WebUI 后端 uvicorn 以 webui/backend 为 CWD 运行，人审「采纳」流程
+# 在后端进程内调用本模块）会解析到 <CWD>/presets/… 而报 FileNotFoundError。
+# 统一改为按本文件位置推导的绝对路径，任何 CWD 下均可用。
+_PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PRESETS_DIR = os.path.join(_PROJECT_ROOT, "presets")
 
 
 def load_preset(preset_arg: str) -> dict[str, Any]:
