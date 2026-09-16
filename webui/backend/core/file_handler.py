@@ -100,19 +100,40 @@ def _make_thumbnail(src_path: Path, file_id: str) -> str:
         return None
 
 
+#: 材质家族 → 品类 preset（**材质判别远比宽高比可靠**，故优先）
+FAMILY_TO_PRESET = {
+    "金地屏风": "japanese_screen_gold",
+    "绢本工笔": "chinese_ink_landscape_ai",   # README：绢本工笔必须用该 preset（勿用 textile_damask）
+    "宣纸水墨": "chinese_ink_landscape_ai",
+    "油画布": "western_oil_painting",
+    "织物壁布": "textile_damask_photo",       # 壁布/面料实物照（非可平铺数码纹样）
+}
+
+#: 家族判别的置信度门槛（`classify_material_family` 的“其他”兜底为 0.3）
+_FAMILY_MIN_CONF = 0.6
+
+#: **纺织类**家族：绢本（绢）与织物壁布（布）同属纺织品，仅靠材质判别难以再分。
+#: 在此范围内，**「检出凸起实体样块」= 实物样品照**，可据此改判为壁布样品照 preset。
+#: 放在这个窄范围里做，才不会把带绫边外框的金地屏风也误判成样品照。
+_TEXTILE_FAMILIES = {"绢本工笔", "织物壁布"}
+
+
 def _recommend_preset(dimensions: Optional[dict],
                       image_path: Optional[str] = None) -> tuple[str, float]:
-    """MVP 智能推荐：先判「实物样品照」，再按宽高比粗判品类。
+    """智能推荐：**材质家族优先**，宽高比仅作兜底。
 
-    - **检出实体样块**（照片中一块凸起的实物）→ `textile_damask_photo`（壁布/面料样品照）
-      复用 `engine/core/sample_panel` 的零硬编码样块检测（长直边持续性）。
-      必须先判：样品照的宽高比可能是任意值，纯按比例会误荐屏风/纹样 preset。
-    - 宽高比 ≈ 2:1（横向长卷/屏风）→ japanese_screen_gold
-    - 接近 1:1（方阵纹样）→ textile_damask
-    - 其余 → japanese_screen_gold（默认）
+    判据顺序（2026-09-16 修正，顺序本身是关键）：
+      1. **材质判别（指纹）→ 家族 → preset**（`FAMILY_TO_PRESET`）；
+      2. 家族置信度不足时，才退回宽高比粗判。
 
-    返回 (preset_name, confidence)。检测失败一律安全降级为宽高比判断。
+    ⚠️ 曾踩的坑（勿回退）：早期把「**样块检测**」放在最前并单独决定品类 —— 而
+    带绫边外框的**金地屏风**的四条直边恰好满足"长直边持续性"判据，被误判为
+    「实物样块」→ 推荐成壁布 preset（实测 `inputs/source_4000.jpg` 中招）。
+    故现在样块检测**只用于织物族的置信度增强**，不单独决定品类。
+
+    返回 (preset_name, confidence)；任何检测失败一律安全降级，绝不影响上传。
     """
+    family, conf, panel_hit = None, None, False
     if image_path:
         try:
             import sys as _sys
@@ -124,26 +145,25 @@ def _recommend_preset(dimensions: Optional[dict],
             import cv2 as _cv2
             from engine.core.io_utils import imread_unicode
             from engine.core.sample_panel import detect_sample_panel_bbox
+            from engine.adaptive.fingerprint import extract_fingerprint
+            from engine.adaptive.material_classifier import classify_material_family
 
             # 统一走 Unicode 安全读图（中文路径下 cv2.imread 会静默返回 None）
             img = imread_unicode(str(image_path))
             if img is not None:
-                # ① 实体样块 → 壁布样品照 preset（最高置信）
-                gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
-                if detect_sample_panel_bbox(gray) is not None:
-                    return "textile_damask_photo", 0.80
-
-                # ② 材质判别（指纹）：织物/壁布类实际照片（无样块，如绗缝面料特写）
-                #    → 同样走实物样品照 preset（不能按宽高比乱荐绘画 preset）。
-                from engine.adaptive.fingerprint import extract_fingerprint
-                from engine.adaptive.material_classifier import classify_material_family
                 family, conf = classify_material_family(extract_fingerprint(img))
-                if family == "织物壁布" and float(conf) >= 0.6:
-                    return "textile_damask_photo", round(float(conf), 2)
+                if (family in FAMILY_TO_PRESET) and float(conf) >= _FAMILY_MIN_CONF:
+                    # 纺织类：再问一句「有没有凸起实体样块」——有则说明是实物样品照
+                    if family in _TEXTILE_FAMILIES:
+                        gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+                        panel_hit = detect_sample_panel_bbox(gray) is not None
+                        if panel_hit:
+                            return "textile_damask_photo", 0.85
+                    return FAMILY_TO_PRESET[family], round(float(conf), 2)
         except Exception as _e:
             # 检测不可用/失败 → 降级为宽高比判断，绝不影响上传；但**披露**原因，
-            # 避免"样品照/织物没被识别"这种退化无声无息（P1-1 静默降级）。
-            print(f"[file_handler] 样块/材质检测跳过，降级为宽高比推荐：{type(_e).__name__}: {_e}")
+            # 避免"材质没被识别"这种退化无声无息（P1-1 静默降级）。
+            print(f"[file_handler] 材质/样块检测跳过，降级为宽高比推荐：{type(_e).__name__}: {_e}")
 
     if not dimensions:
         return "japanese_screen_gold", 0.5
