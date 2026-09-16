@@ -38,10 +38,20 @@
         }
     ],
 
-    "rule_class_allowlist": ["02_巴洛克团花_Baroque_Medallion"],
+    "rule_class_allowlist": [
+        "01A_画面外框_Wallcovering_Frame",
+        "01B_折缝拼接缝_Wallcovering_Fold_Seam",
+        "02_巴洛克团花_Baroque_Medallion",
+        "03_金箔卷草纹样_Gold_Filigree_Motif"
+    ],
+    "rule_class_allowlist_comment": "2026-09-16 重建。原则：**只保留「本 preset 语义类目」+「介质结构类」（外框/折缝）**，明确拒绝规则引擎的屏风系外来内容类目（书法题跋/雁群/建筑/人物/林木/远山/水波）—— 那些对壁布语义错误，纳入即等于产出命名错误的垃圾层。实测（工艺壁布-2）：规则 provider 产出 6 层，其中 09/08/07/06 为屏风系内容类目 → 丢弃；11A/11B 经 name_mapping 转为壁布介质结构层后保留。",
 
     "layer_semantics": {
-        "name_mapping": {},
+        "name_mapping": {
+            "11a_brocade_outer_frame": "01A_画面外框_Wallcovering_Frame",
+            "11b_panel_fold_seams": "01B_折缝拼接缝_Wallcovering_Fold_Seam"
+        },
+        "name_mapping_comment": "11A/11B 是规则引擎的屏风系检测器（外框环 / 周期性竖直暗谷）。壁布同样存在「布料外框 / 折缝与拼接缝」，故复用为**介质结构检测器**并映射为壁布语义词。键须小写（_map_to_bilingual_names 以小写匹配）。两个新名均含弥散门豁免关键词（外框/frame、seam），避免天然全画布的结构层被误杀。",
         "layer_attributes": [
             {
                 "match": ["金箔", "gold", "foil"],

@@ -326,12 +326,18 @@ def load_pca_model(path: Optional[str] = None) -> bool:
 
 
 def _apply_pca(raw_vector: np.ndarray, n_components: int = 128) -> np.ndarray:
-    """PCA 降维到 n_components 维（延迟导入 sklearn，避免未安装时报错）。
+    """指纹向量的**标准化与（可选）降维**，输出恒为 n_components 维。
 
-    2026-09-16 修复（PCA 真正生效）：
-      - 首次调用会**尝试加载已训练模型**（`load_pca_model`）；加载成功则走
-        「真实标准化 + PCA transform」，而不是此前的恒等占位。
-      - 未训练/未安装 sklearn 时**回退**到旧的截断/填充行为（行为不变，不破坏既有单测）。
+    ⚠️ 当前生产状态（2026-09-16 实测核实，勿误读）：
+      已训练模型 `engine/adaptive/fingerprint_pca.pkl` 中 **pca=None** —— 因为
+      `train_pca_from_dataset` 规定样本数 < `_MIN_SAMPLES_FOR_PCA`(20) 时**有意不降维**
+      （本项目 inputs 仅 9 张，降维到个位数反而丢信息）。
+      故当前 embedding = **真实 StandardScaler 标准化**（mean/scale 来自真实训练数据，
+      非恒等占位）后截断/填充到 128 维。这不是占位实现，而是「只标准化、不降维」的
+      已文档化分支；待样本充足重新训练后，PCA transform 分支才会启用。
+
+    - 延迟导入 sklearn，避免未安装时报错。
+    - 未训练/未安装 sklearn 时回退到截断/填充（行为不变，不破坏既有单测）。
     """
     global _pca_model, _scaler, _pca_loaded
 

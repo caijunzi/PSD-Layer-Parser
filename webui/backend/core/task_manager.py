@@ -238,6 +238,10 @@ class TaskManager:
                 )
                 task["output_files"] = files
                 manifest = self._read_manifest(out_dir)
+                # 关键：manifest 也存到 task 记录上 —— WS 断线重连时由
+                # ws/progress.py 补播 `completed`，若此处不落存，补播只能给空 {}，
+                # 前端 manifest 面板会莫名其妙变空（2026-09-16 修复前后端不一致）。
+                task["manifest"] = manifest
                 await ws_manager.broadcast(task_id, {
                     "type": "completed", "task_id": task_id,
                     "elapsed_time": elapsed_total,

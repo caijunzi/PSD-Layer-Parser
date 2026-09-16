@@ -13,7 +13,8 @@ router = APIRouter()
 async def progress_ws(websocket: WebSocket, task_id: str):
     """订阅某任务的实时进度。
 
-    推送消息类型：progress | completed | error
+    推送消息类型：``progress`` | ``completed`` | ``audit`` | ``error``
+    （``audit`` 由 ``task_manager`` 在任务完成后异步广播，见其 `_run_audit_*`）
     """
     await manager.connect(task_id, websocket)
     task = task_manager.get_task(task_id)
@@ -30,11 +31,13 @@ async def progress_ws(websocket: WebSocket, task_id: str):
                 "replay": True,
             })
         if task.get("status") == "completed":
+            # manifest 必须取 task 记录里落存的那份（task_manager 完成时写入），
+            # 不能给空 {} —— 否则重连后前端 manifest 面板为空，与实时路径不一致。
             await websocket.send_json({
                 "type": "completed", "task_id": task_id,
                 "elapsed_time": task.get("elapsed_time", 0),
                 "output_files": task.get("output_files", []),
-                "manifest": {},
+                "manifest": task.get("manifest", {}),
             })
 
     try:

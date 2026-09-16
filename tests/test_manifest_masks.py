@@ -108,11 +108,17 @@ class TestPresetSchema(unittest.TestCase):
         self.assertTrue(any("floor" in i for i in issues))
 
     def test_real_presets_non_blocking(self):
-        """现有 6 个 preset 只告警不抛错（load_preset 非破坏）。"""
+        """现有 preset 只告警不抛错（load_preset 非破坏）。
+
+        ⚠️ 必须断言真的扫到了 preset —— 否则目录为空/路径错时本测试会**真空通过**。
+        """
         from engine.schemas.presets import load_preset
 
         presets_dir = ENGINE_ROOT / "presets"
-        for p in presets_dir.glob("*.json"):
+        files = sorted(presets_dir.glob("*.json"))
+        self.assertGreaterEqual(len(files), 5,
+                                f"presets 目录疑似为空/路径错误（仅找到 {len(files)} 个）——本测试将变成真空通过")
+        for p in files:
             data = json.loads(p.read_text(encoding="utf-8"))
             # 不应抛异常
             validate_preset(data)

@@ -181,7 +181,10 @@ npm run dev                                                  # webui/frontend �
 # 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
 #        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
 py -m pytest tests/ -q                                        # 引擎 273 passed / 5 skipped
-py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 40 OK
+py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 41 OK
+# ★ 提交前自检（一键，五道门；见 §8）
+py scripts/preflight.py            # 全量：解释器依赖 + 静默降级审计 + 行尾一致性 + 两组测试 + 前端 tsc
+py scripts/preflight.py --fast     # 秒级：只跑 静默降级审计 + 行尾一致性（pre-commit 钩子用这个）
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg
@@ -191,7 +194,14 @@ python tools/calibrate_density_bands.py inputs/source_4000.jpg
 
 - 输出产物：`webui/data/outputs/{task_id}/`（PSB + manifest + masks）
 - 不要提交：PSB/大文件（`webui/data/` 已 gitignore）、`scratch/` 中间产物
-- 提交前必跑：两组全量测试 + 前端 `tsc --noEmit`
+- **提交前必跑（2026-09-16 起统一为一条命令）**：`py scripts/preflight.py`
+  —— 五道门：① 解释器依赖（须系统 Python 3.12，含 numpy/cv2/PIL）
+  ② **静默降级审计 P0 必须为 0**（`tools/audit_degradation.py`）
+  ③ **行尾一致性**（逐文件比对行尾种类与 HEAD，抓"整文件等量 +/-"噪音 diff）
+  ④ 引擎全量 pytest ⑤ WebUI 全量 unittest + 前端 `tsc --noEmit`。
+  - 本地已装 pre-commit 钩子（`.git/hooks/pre-commit`，调用 `--fast`）；
+    换机器后重装：`cp scripts/pre-commit-hook .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
+  - ⚠️ 跑引擎/长任务须加 `CODEBUDDY_SAFE_DELETE_ENABLED=0`（见 §10.5），preflight 已内置。
 
 ## 10. 2026-09-16 批次（**最新状态，优先阅读**）
 

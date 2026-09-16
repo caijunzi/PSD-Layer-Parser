@@ -134,26 +134,92 @@ class TestGoldenScreenGold(unittest.TestCase):
     # ==================== Stage 3 增强：核心类目必出 + 审计不退化 ====================
 
     def test_core_categories_must_be_detected(self):
-        """核心类目必出：标记为 core=true 的语义类在实际运行中必须被检测到。
-        
-        Stage 3（2026-09-13）：从 episode 归档中验证核心语义类的检测率。
-        该测试需要先运行分割引擎，生成 episode 归档，然后从归档中提取检测信息。
-        
-        由于该测试依赖实际运行，暂时跳过（需要完整的端到端测试环境）。
-        待 Stage 4-5 完成后（案例推理库 CBR + 主动学习），再启用此测试。
+        """核心类目必出（**有意离线跳过**，见下）。
+
+        该测试需要一次真实引擎运行产生的 episode 归档（含逐类目检测记录），
+        而归档位于 `outputs/`（gitignore，不入库）→ 离线单元测试无法断言。
+        真实验证由端到端跑批 + 8 维审计承担（见 docs/验收报告_*）；
+        若未来把「episode 归档快照」作为受控夹具入库，应在此启用。
         """
-        self.skipTest("需要端到端运行环境，待 Stage 4-5 完成后启用")
+        self.skipTest("需要真实引擎运行产生的 episode 归档（outputs/ 不入库）——由端到端审计承担")
 
     def test_audit_metrics_no_regression(self):
-        """审计不退化：验证审计 8 维指标相对于回归基线不退化（调用 regression_tester.py）。
-        
-        Stage 3（2026-09-13）：从回归基线 tests/baseline_audit_8d.json 中读取基线数据，
-        对比当前任务的审计 8 维指标，验证核心指标（lost_ratio, rmse_lowfreq）不退化超过 5%。
-        
-        由于该测试依赖实际运行 + result.audit.json，暂时跳过（需要完整的端到端测试环境）。
-        待 Stage 4-5 完成后（案例推理库 CBR + 主动学习），再启用此测试。
+        """审计不退化：**回归测试器机制自检**（不再永久跳过）。
+
+        此前该测试 `self.skipTest(...)` 永久跳过，而 `run_regression_test` 与
+        `tests/baseline_audit_8d.json` 都已存在却从未被任何测试调用 —— 即
+        「回归保护存在但从未证明有效」。本测试用**临时文件端到端**驱动
+        `run_regression_test`，证明它真能：① 无退化时放行；② 各类退化能被抓到。
+        （对真实产物的逐任务回归仍由端到端跑批承担。）
         """
-        self.skipTest("需要端到端运行环境，待 Stage 4-5 完成后启用")
+        import json
+        import tempfile
+        import os
+        from engine.adaptive.regression_tester import run_regression_test
+
+        def _audit(lost, rmse_low, n_layers, purity, passed=True):
+            """构造与 tools/audit_psb.py 同构的最小审计 JSON。"""
+            return {
+                "passed": passed,
+                "dims": {
+                    "④ 内容承载": {"passed": True, "metrics": {"lost_ratio": lost}},
+                    "⑤ 合成等价性": {"passed": True, "metrics": {"rmse_raw": rmse_low, "rmse_lowfreq": rmse_low}},
+                    "⑦ plate 合规": {"passed": True, "metrics": {"plate_purity_ok": purity, "tac_max_pct": 300.0}},
+                    "① 层属性": {"passed": True, "metrics": {"layer_count": n_layers}},
+                },
+            }
+
+        base = {
+            "t_base": {
+                "lost_ratio": 0.001, "rmse_raw": 1.0, "rmse_lowfreq": 1.0,
+                "plate_purity_ok": True, "tac_max_pct": 300.0, "n_layers": 10,
+                "total_size_mb": 0.0, "backend": "fallback_rule_based",
+                "passed": True,
+                "dims_passed": {"④ 内容承载": True, "⑤ 合成等价性": True,
+                                "⑦ plate 合规": True, "① 层属性": True},
+            }
+        }
+        tmp = tempfile.mkdtemp()
+        base_path = os.path.join(tmp, "baseline.json")
+        with open(base_path, "w", encoding="utf-8") as f:
+            json.dump(base, f, ensure_ascii=False)
+
+        def _run(audit_obj):
+            cur = os.path.join(tmp, "current.audit.json")
+            with open(cur, "w", encoding="utf-8") as f:
+                json.dump(audit_obj, f, ensure_ascii=False)
+            return run_regression_test(cur, "t_base", baseline_path=base_path)
+
+        # ① 无退化 → 必须放行
+        r = _run(_audit(0.001, 1.0, 10, True))
+        self.assertTrue(r["passed"], f"无退化应放行，实际 issues={r['issues']}")
+
+        # ② 低频 RMSE 退化（1.0 → 2.0，+100% > 5%）→ 必须抓到
+        r = _run(_audit(0.001, 2.0, 10, True))
+        self.assertFalse(r["passed"], "rmse_lowfreq +100% 必须判退化")
+        self.assertTrue(any("低频 RMSE" in x for x in r["issues"]), r["issues"])
+
+        # ③ 内容丢失退化（0.001 → 0.05）→ 必须抓到
+        r = _run(_audit(0.05, 1.0, 10, True))
+        self.assertFalse(r["passed"], "lost_ratio 恶化必须判退化")
+        self.assertTrue(any("内容丢失" in x for x in r["issues"]), r["issues"])
+
+        # ④ 层数骤减（10 → 5）→ 必须抓到
+        r = _run(_audit(0.001, 1.0, 5, True))
+        self.assertFalse(r["passed"], "层数腰斩必须判退化")
+        self.assertTrue(any("图层数减少" in x for x in r["issues"]), r["issues"])
+
+        # ⑤ 底板纯度布尔翻转 → 必须抓到
+        r = _run(_audit(0.001, 1.0, 10, False))
+        self.assertFalse(r["passed"], "plate_purity_ok True→False 必须判退化")
+        self.assertTrue(any("底板纯度退化" in x for x in r["issues"]), r["issues"])
+
+        # ⑥ 基线缺失该任务 → 必须显式报错（不得静默通过）
+        cur = os.path.join(tmp, "cur2.audit.json")
+        with open(cur, "w", encoding="utf-8") as f:
+            json.dump(_audit(0.001, 1.0, 10, True), f, ensure_ascii=False)
+        with self.assertRaises(KeyError):
+            run_regression_test(cur, "不存在的任务", baseline_path=base_path)
 
 
 if __name__ == "__main__":
