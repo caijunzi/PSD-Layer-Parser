@@ -134,14 +134,34 @@ class TestGoldenScreenGold(unittest.TestCase):
     # ==================== Stage 3 增强：核心类目必出 + 审计不退化 ====================
 
     def test_core_categories_must_be_detected(self):
-        """核心类目必出（**有意离线跳过**，见下）。
+        """核心类目必出：preset 中 core=true 的语义类，在**真实运行**的 episode 归档中
+        必须全部被检测到（2026-09-16 启用——以脱敏的真实归档为受控夹具）。
 
-        该测试需要一次真实引擎运行产生的 episode 归档（含逐类目检测记录），
-        而归档位于 `outputs/`（gitignore，不入库）→ 离线单元测试无法断言。
-        真实验证由端到端跑批 + 8 维审计承担（见 docs/验收报告_*）；
-        若未来把「episode 归档快照」作为受控夹具入库，应在此启用。
+        夹具 `tests/fixtures/episode_chinese_ink_golden.json` 来自一次真实引擎运行
+        （chinese_ink_landscape_ai / 宋代写意 / design，8 维审计通过，路径已脱敏）。
+        此前该测试永久 skipTest——因为归档在 gitignore 的 outputs/ 里；现以夹具入库，
+        离线即可验证「core 类目不得静默漏检」。
         """
-        self.skipTest("需要真实引擎运行产生的 episode 归档（outputs/ 不入库）——由端到端审计承担")
+        import json
+        fixture = ENGINE_ROOT / "tests" / "fixtures" / "episode_chinese_ink_golden.json"
+        self.assertTrue(fixture.is_file(), "缺少 episode 夹具")
+        ep = json.loads(fixture.read_text(encoding="utf-8"))
+
+        preset_name = ep.get("preset")
+        preset_path = Path(ENGINE_ROOT, "presets", f"{preset_name}.json")
+        self.assertTrue(preset_path.is_file(), f"夹具引用的 preset 不存在: {preset_name}")
+        cfg = json.loads(preset_path.read_text(encoding="utf-8"))
+
+        core = [c["layer_name"] for c in cfg["ai_semantic_classes"] if c.get("core")]
+        self.assertGreaterEqual(len(core), 5, "preset 未标记任何 core 类目，本测试失去意义")
+
+        detected = {d.get("layer_name") for d in (ep.get("detections") or [])}
+        missing = [c for c in core if c not in detected]
+        self.assertEqual(
+            missing, [],
+            f"core 类目在真实运行中漏检：{missing}\n"
+            f"  episode={ep.get('episode_id')} preset={preset_name}\n"
+            f"  实际检出 {len(detected)} 层: {sorted(detected)}")
 
     def test_golden_baseline_is_real_data(self):
         """基线必须是**真实测量值**（2026-09-16 重提后加防腐）。

@@ -26,19 +26,62 @@ class DBManager:
         """
         self.db_path = Path(db_path)
         self._local = threading.local()
-    
+        self._schema_lock = threading.Lock()
+        self._schema_checked = False
+
     def _get_connection(self) -> sqlite3.Connection:
         """
         获取线程本地连接（懒初始化）
         """
         if not hasattr(self._local, 'conn'):
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._local.conn = sqlite3.connect(
                 str(self.db_path),
                 check_same_thread=False,
                 timeout=10.0
             )
             self._local.conn.row_factory = sqlite3.Row  # 允许按列名访问
+            self._ensure_schema()
         return self._local.conn
+
+    def _ensure_schema(self) -> None:
+        """全新数据库首连自动迁移（2026-09-16）。
+
+        仅当 `categories` 表不存在（=全新库）时才按 001→002→003→004 顺序迁移；
+        **已存在的库一律不触碰**（生产库由运维管理，自动重跑迁移有副作用）。
+
+        此前的问题：全新 ADAPTIVE_DB_PATH 首查即报
+        `no such table: category_prompts` → 自适应整条链路静默不启用
+        （有打印、无自愈），CLI 新环境/隔离跑批都会退化。
+        """
+        if self._schema_checked:
+            return
+        with self._schema_lock:
+            if self._schema_checked:
+                return
+            conn = self._local.conn
+            row = conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='categories'"
+            ).fetchone()
+            if row is None:
+                self._run_migrations_fresh()
+            self._schema_checked = True
+
+    def _run_migrations_fresh(self) -> None:
+        """对全新库按序执行迁移 001→004（含种子数据与类目树）。"""
+        from .migrations.migration_001_init import run_migration as m001
+        from .migrations.migration_002_apply import apply_migration as m002
+        from .migrations.migration_003_build_tree import apply_migration as m003
+        from .migrations.migration_004_feedback_ops import apply_migration as m004
+
+        sql_dir = Path(__file__).resolve().parent   # engine/adaptive（schema.sql / seed_data.sql）
+        print(f"[DBManager] 检测到全新数据库，自动执行迁移 001→004：{self.db_path}")
+        m001(str(self.db_path), str(sql_dir))
+        m002(str(self.db_path))
+        m003(str(self.db_path))
+        m004(str(self.db_path))
+        print("[DBManager] 自适应数据库迁移完成（schema + seed + 类目树 + 反馈操作）")
     
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """

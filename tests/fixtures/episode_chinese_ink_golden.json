@@ -1,0 +1,817 @@
+{
+ "episode_id": "ep_20260915T123514065008+0000_5342919ab6f9",
+ "timestamp": "2026-09-15T12:35:14.065008+00:00",
+ "material_family": "宣纸水墨",
+ "category_ids": [
+  "brocade_frame",
+  "panel_folds",
+  "seal",
+  "calligraphy",
+  "fauna_geese",
+  "figures_scholar",
+  "architecture",
+  "trees_vegetation",
+  "mountains_cliffs",
+  "distant_mountains",
+  "base_borders",
+  "bamboo",
+  "waterfalls",
+  "plum_blossom"
+ ],
+ "n_categories": 14,
+ "outcome": "selected",
+ "confidence": 0.65,
+ "image_path": "宋代写意山水画创作.jpeg",
+ "fingerprint_summary": {
+  "image_shape": [
+   1448,
+   2896
+  ],
+  "affinity_top": null
+ },
+ "embedding": [
+  2.0,
+  4.193408,
+  81.568626,
+  2.0,
+  20.0,
+  16.222656,
+  20.170961,
+  0.000347,
+  0.007112,
+  0.019706,
+  0.023169,
+  0.024836,
+  0.029181,
+  0.031216,
+  0.036405,
+  0.044471,
+  0.057317,
+  0.07434,
+  0.102062,
+  0.160584,
+  0.248401,
+  0.13957,
+  0.001282,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  2.4e-05,
+  0.275126,
+  0.705509,
+  0.019331,
+  1.1e-05,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.02367,
+  0.423674,
+  0.533366,
+  0.019077,
+  0.000212,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.16576,
+  0.106076,
+  0.078418,
+  0.057722,
+  0.04415,
+  0.040833,
+  0.03296,
+  0.034712,
+  0.039478,
+  0.04165,
+  0.049569,
+  0.063631,
+  0.067696,
+  0.063678,
+  0.044407,
+  0.069261,
+  0.253614,
+  0.228504,
+  1.828049,
+  3.089244,
+  0.735933,
+  0.668598,
+  0.901163,
+  0.833316,
+  0.131948,
+  7.207,
+  0.000102,
+  0.007152,
+  0.002636,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0
+ ],
+ "audit_full": {
+  "psb": "E:\\CK\\C-desk\\CK-WORKS\\PSD图层处理 - WorkBuddy\\outputs\\adaptive-e2e-20260915-final\\case-04\\cold.psb",
+  "size": [
+   2896,
+   1448
+  ],
+  "layer_count": 10,
+  "color_mode": "rgb",
+  "dims": {
+   "① 层属性": {
+    "passed": true,
+    "metrics": {
+     "layer_count": 10,
+     "content_layers": 7,
+     "duplicate_names": 0,
+     "invisible_layers": 0
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "② 分辨率真实性": {
+    "passed": true,
+    "metrics": {
+     "res_mismatch": 0
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "③ 实例重复": {
+    "passed": true,
+    "metrics": {
+     "duplicate_pairs": 0
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "④ 内容承载": {
+    "passed": true,
+    "metrics": {
+     "ink_px": 1721479,
+     "lost_px": 6722,
+     "lost_ratio": 0.003905
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "⑤ 合成等价性": {
+    "passed": true,
+    "metrics": {
+     "rmse_raw": 6.74,
+     "rmse_lowfreq": 2.53
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "⑥ 底板纯净度": {
+    "passed": true,
+    "metrics": {
+     "base_layer": "01_纯净画布底板_Base_Ground",
+     "opaque_pct": 100.0,
+     "dark_ratio_all": 6.89,
+     "dark_雁群区": 10.35,
+     "dark_石矶区": 22.47,
+     "dark_右侧山峦": 10.53,
+     "dark_中央枯树": 15.2,
+     "dark_底色区": 0.53,
+     "dark_右下岩石": 0.97,
+     "note": "分区域 dark 为品类相关指标（披露不判失败）；深查用 tools/calibrate_density_bands.py + 金标准"
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   },
+   "⑦ plate 合规": {
+    "passed": true,
+    "metrics": {
+     "color_mode": "rgb（design 线，plate 项不适用）",
+     "generated_pixel_ratio": 0.006251,
+     "deocclusion_engine": "LaMaInpaintingProvider:openvino_GPU.0",
+     "deocclusion_generative": true,
+     "note": "design 线含生成式补全；如需制版请走 plate 线（确定性）"
+    },
+    "issues": [],
+    "na": true,
+    "evaluated": false
+   },
+   "⑧ manifest 一致": {
+    "passed": true,
+    "metrics": {
+     "declared": 10,
+     "actual": 10
+    },
+    "issues": [],
+    "evaluated": true,
+    "na": false
+   }
+  },
+  "issues": [],
+  "passed": true
+ },
+ "audit_8d": {
+  "lost_ratio": 0.003905,
+  "rmse_lowfreq": 2.53,
+  "rmse_raw": 6.74,
+  "plate_purity_ok": null,
+  "tac_max_pct": null,
+  "n_layers": 10,
+  "passed": true
+ },
+ "output_mode": "design",
+ "auto_tune": {
+  "global_percentiles": {},
+  "regions": {},
+  "density_bands": []
+ },
+ "notes": "mode=hybrid; n_selected=14",
+ "detections": [
+  {
+   "layer_name": "11A_外框装裱绫边_Brocade_Outer_Frame",
+   "category_id": "brocade_frame",
+   "prompt": "decorative silk brocade mounting frame",
+   "boxes": [
+    [
+     0.23346509039402008,
+     0.6537622809410095,
+     0.2519450783729553,
+     0.5391953587532043
+    ],
+    [
+     0.2333400845527649,
+     0.6535310745239258,
+     0.2517876923084259,
+     0.539594829082489
+    ]
+   ],
+   "logits": [
+    0.49266737699508667,
+    0.4683654010295868
+   ],
+   "num_boxes": 2,
+   "instance_split": false
+  },
+  {
+   "layer_name": "10_长泽鱼朱砂印_Cinnabar_Seal",
+   "category_id": "seal",
+   "prompt": "red square cinnabar seal stamp",
+   "boxes": [
+    [
+     0.6985111832618713,
+     0.8699442744255066,
+     0.09612584859132767,
+     0.035277675837278366
+    ]
+   ],
+   "logits": [
+    0.43375179171562195
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "09_款识诗文题跋_Calligraphy_Inscription",
+   "category_id": "calligraphy",
+   "prompt": "chinese calligraphy inscription poetry characters",
+   "boxes": [
+    [
+     0.2337626963853836,
+     0.6501446962356567,
+     0.2547731101512909,
+     0.5459338426589966
+    ]
+   ],
+   "logits": [
+    0.5801637172698975
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "08_高空飞雁群落_Fauna_Geese",
+   "category_id": "fauna_geese",
+   "prompt": "flying wild geese birds in sky",
+   "boxes": [
+    [
+     0.49988600611686707,
+     0.32016319036483765,
+     0.9939462542533875,
+     0.6260483860969543
+    ]
+   ],
+   "logits": [
+    0.38083434104919434
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "07_文人高士侍童_Figures_Attendants",
+   "category_id": "figures_scholar",
+   "prompt": "scholar attendants people sitting inside pavilion",
+   "boxes": [
+    [
+     0.371703565120697,
+     0.6617746949195862,
+     0.09268789738416672,
+     0.14009861648082733
+    ]
+   ],
+   "logits": [
+    0.6239975690841675
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "06_水榭草堂建筑_Architecture_Pavilion",
+   "category_id": "architecture",
+   "prompt": "traditional wooden pavilion architecture house",
+   "boxes": [
+    [
+     0.3745550811290741,
+     0.6579887866973877,
+     0.07973551750183105,
+     0.12960147857666016
+    ]
+   ],
+   "logits": [
+    0.885547935962677
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "05_松柏林木植被_Trees_Vegetation",
+   "category_id": "trees_vegetation",
+   "prompt": "pine tree branches foliage vegetation forest",
+   "boxes": [
+    [
+     0.23375263810157776,
+     0.6493107676506042,
+     0.25309666991233826,
+     0.5455144643783569
+    ],
+    [
+     0.23358449339866638,
+     0.6494415998458862,
+     0.25383999943733215,
+     0.5457895398139954
+    ]
+   ],
+   "logits": [
+    0.5436445474624634,
+    0.35097888112068176
+   ],
+   "num_boxes": 2,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.7% > 50%（bbox 1999x1148，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "04_近景山石矶岸_Mountains_Cliffs",
+   "category_id": "mountains_cliffs",
+   "prompt": "rocky mountains cliffs shorelines ground rocks",
+   "boxes": [
+    [
+     0.4990556240081787,
+     0.5095930695533752,
+     0.992241382598877,
+     0.9550079107284546
+    ]
+   ],
+   "logits": [
+    0.4601171314716339
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.0% > 50%（bbox 1989x1138，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "03_远山浅绛烟岚_Distant_Mountains",
+   "category_id": "distant_mountains",
+   "prompt": "distant misty hills light ink mountains",
+   "boxes": [
+    [
+     0.49949970841407776,
+     0.3955504298210144,
+     0.993847668170929,
+     0.7202414274215698
+    ],
+    [
+     0.49949076771736145,
+     0.3959072530269623,
+     0.9939401149749756,
+     0.7242293357849121
+    ]
+   ],
+   "logits": [
+    0.48618316650390625,
+    0.45133501291275024
+   ],
+   "num_boxes": 2,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.5% > 50%（bbox 1989x1148，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "01_纯净金箔底板_Base_Gold_Ground",
+   "category_id": "base_borders",
+   "prompt": "clean golden background support",
+   "boxes": [
+    [
+     0.2342657893896103,
+     0.6491764187812805,
+     0.25144070386886597,
+     0.5454836487770081
+    ]
+   ],
+   "logits": [
+    0.4058343470096588
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "竹_Bamboo",
+   "category_id": "bamboo",
+   "prompt": "竹",
+   "boxes": [
+    [
+     0.23341919481754303,
+     0.6497139930725098,
+     0.2540700435638428,
+     0.5448318123817444
+    ]
+   ],
+   "logits": [
+    0.3694808781147003
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "梅花_Plum_Blossom",
+   "category_id": "plum_blossom",
+   "prompt": "梅花",
+   "boxes": [
+    [
+     0.233350470662117,
+     0.6503328084945679,
+     0.2540431320667267,
+     0.5472834706306458
+    ],
+    [
+     0.17566299438476562,
+     0.6489753723144531,
+     0.13835345208644867,
+     0.5440698862075806
+    ],
+    [
+     0.2840270698070526,
+     0.654218316078186,
+     0.1517501175403595,
+     0.5318900942802429
+    ]
+   ],
+   "logits": [
+    0.3961387872695923,
+    0.3648759722709656,
+    0.3914942443370819
+   ],
+   "num_boxes": 3,
+   "instance_split": false,
+   "quality_gate_passed": true
+  }
+ ],
+ "dino_detections": [
+  {
+   "layer_name": "11A_外框装裱绫边_Brocade_Outer_Frame",
+   "category_id": "brocade_frame",
+   "prompt": "decorative silk brocade mounting frame",
+   "boxes": [
+    [
+     0.23346509039402008,
+     0.6537622809410095,
+     0.2519450783729553,
+     0.5391953587532043
+    ],
+    [
+     0.2333400845527649,
+     0.6535310745239258,
+     0.2517876923084259,
+     0.539594829082489
+    ]
+   ],
+   "logits": [
+    0.49266737699508667,
+    0.4683654010295868
+   ],
+   "num_boxes": 2,
+   "instance_split": false
+  },
+  {
+   "layer_name": "10_长泽鱼朱砂印_Cinnabar_Seal",
+   "category_id": "seal",
+   "prompt": "red square cinnabar seal stamp",
+   "boxes": [
+    [
+     0.6985111832618713,
+     0.8699442744255066,
+     0.09612584859132767,
+     0.035277675837278366
+    ]
+   ],
+   "logits": [
+    0.43375179171562195
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "09_款识诗文题跋_Calligraphy_Inscription",
+   "category_id": "calligraphy",
+   "prompt": "chinese calligraphy inscription poetry characters",
+   "boxes": [
+    [
+     0.2337626963853836,
+     0.6501446962356567,
+     0.2547731101512909,
+     0.5459338426589966
+    ]
+   ],
+   "logits": [
+    0.5801637172698975
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "08_高空飞雁群落_Fauna_Geese",
+   "category_id": "fauna_geese",
+   "prompt": "flying wild geese birds in sky",
+   "boxes": [
+    [
+     0.49988600611686707,
+     0.32016319036483765,
+     0.9939462542533875,
+     0.6260483860969543
+    ]
+   ],
+   "logits": [
+    0.38083434104919434
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "07_文人高士侍童_Figures_Attendants",
+   "category_id": "figures_scholar",
+   "prompt": "scholar attendants people sitting inside pavilion",
+   "boxes": [
+    [
+     0.371703565120697,
+     0.6617746949195862,
+     0.09268789738416672,
+     0.14009861648082733
+    ]
+   ],
+   "logits": [
+    0.6239975690841675
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "06_水榭草堂建筑_Architecture_Pavilion",
+   "category_id": "architecture",
+   "prompt": "traditional wooden pavilion architecture house",
+   "boxes": [
+    [
+     0.3745550811290741,
+     0.6579887866973877,
+     0.07973551750183105,
+     0.12960147857666016
+    ]
+   ],
+   "logits": [
+    0.885547935962677
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "quality_gate_passed": true
+  },
+  {
+   "layer_name": "05_松柏林木植被_Trees_Vegetation",
+   "category_id": "trees_vegetation",
+   "prompt": "pine tree branches foliage vegetation forest",
+   "boxes": [
+    [
+     0.23375263810157776,
+     0.6493107676506042,
+     0.25309666991233826,
+     0.5455144643783569
+    ],
+    [
+     0.23358449339866638,
+     0.6494415998458862,
+     0.25383999943733215,
+     0.5457895398139954
+    ]
+   ],
+   "logits": [
+    0.5436445474624634,
+    0.35097888112068176
+   ],
+   "num_boxes": 2,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.7% > 50%（bbox 1999x1148，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "04_近景山石矶岸_Mountains_Cliffs",
+   "category_id": "mountains_cliffs",
+   "prompt": "rocky mountains cliffs shorelines ground rocks",
+   "boxes": [
+    [
+     0.4990556240081787,
+     0.5095930695533752,
+     0.992241382598877,
+     0.9550079107284546
+    ]
+   ],
+   "logits": [
+    0.4601171314716339
+   ],
+   "num_boxes": 1,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.0% > 50%（bbox 1989x1138，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "03_远山浅绛烟岚_Distant_Mountains",
+   "category_id": "distant_mountains",
+   "prompt": "distant misty hills light ink mountains",
+   "boxes": [
+    [
+     0.49949970841407776,
+     0.3955504298210144,
+     0.993847668170929,
+     0.7202414274215698
+    ],
+    [
+     0.49949076771736145,
+     0.3959072530269623,
+     0.9939401149749756,
+     0.7242293357849121
+    ]
+   ],
+   "logits": [
+    0.48618316650390625,
+    0.45133501291275024
+   ],
+   "num_boxes": 2,
+   "instance_split": false,
+   "diffuse_gate_passed": false,
+   "diffuse_gate_reason": "外接框覆盖 54.5% > 50%（bbox 1989x1148，弥散掩模拒绝）"
+  },
+  {
+   "layer_name": "01_纯净金箔底板_Base_Gold_Ground",
+   "category_id": "base_borders",
+   "prompt": "clean golden background support",
+   "boxes": [
+    [
+     0.2342657893896103,
+     0.6491764187812805,
+     0.25144070386886597,
+     0.5454836487770081
+    ]
+   ],
+   "logits": [
+    0.4058343470096588
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "竹_Bamboo",
+   "category_id": "bamboo",
+   "prompt": "竹",
+   "boxes": [
+    [
+     0.23341919481754303,
+     0.6497139930725098,
+     0.2540700435638428,
+     0.5448318123817444
+    ]
+   ],
+   "logits": [
+    0.3694808781147003
+   ],
+   "num_boxes": 1,
+   "instance_split": false
+  },
+  {
+   "layer_name": "梅花_Plum_Blossom",
+   "category_id": "plum_blossom",
+   "prompt": "梅花",
+   "boxes": [
+    [
+     0.233350470662117,
+     0.6503328084945679,
+     0.2540431320667267,
+     0.5472834706306458
+    ],
+    [
+     0.17566299438476562,
+     0.6489753723144531,
+     0.13835345208644867,
+     0.5440698862075806
+    ],
+    [
+     0.2840270698070526,
+     0.654218316078186,
+     0.1517501175403595,
+     0.5318900942802429
+    ]
+   ],
+   "logits": [
+    0.3961387872695923,
+    0.3648759722709656,
+    0.3914942443370819
+   ],
+   "num_boxes": 3,
+   "instance_split": false,
+   "quality_gate_passed": true
+  }
+ ],
+ "artifact": "cold.psb",
+ "preset": "chinese_ink_landscape_ai",
+ "effective_auto_tune": {
+  "global_percentiles": {},
+  "regions": {},
+  "density_bands": []
+ },
+ "audited_artifact": "cold.psb"
+}

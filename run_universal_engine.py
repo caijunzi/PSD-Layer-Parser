@@ -750,11 +750,18 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # 会把假阳性层（如壁布图上的「人物/建筑」）带进产物。preset 配置了
     # rule_class_allowlist（含空数组）即启用白名单；未配置则保持旧行为不过滤。
     rule_allow = preset.get("rule_class_allowlist")
+    rejected_ink = None   # 被白名单拒绝的检出层墨迹并集（内容真实存在，不能丢）
     if isinstance(rule_allow, list):
-        dropped = [k for k in masks_dict if k not in set(rule_allow)]
+        allow_set = set(rule_allow)
+        dropped = [k for k in masks_dict if k not in allow_set]
         for k in dropped:
             print(f"     - [allowlist] 丢弃非品类层: {k} ({np.count_nonzero(masks_dict[k])} px)")
-        masks_dict = {k: v for k, v in masks_dict.items() if k in set(rule_allow)}
+            # 2026-09-16：被拒掩模的墨迹**不丢** —— 它不是品类内容（不得以错误类目成层），
+            # 但确实是源图真实墨迹。收集后在 Step 2 并入 ink_all，
+            # 由「未分类墨迹残层」承载（修复可平铺纹样 ④ 9.48% 墨迹丢失）。
+            rejected_ink = masks_dict[k].copy() if rejected_ink is None \
+                else cv2.bitwise_or(rejected_ink, masks_dict[k])
+        masks_dict = {k: v for k, v in masks_dict.items() if k in allow_set}
         if not masks_dict and dropped:
             # 2026-09-16：白名单清空全部产出 = 零语义层，产物必然退化为
             # 「底板 + 残层 + 工艺层」，语义内容全丢。此前静默继续，只在审计 ⑤ 才暴露。
@@ -925,11 +932,24 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # 折痕（屏风物理特征）不从底板抹除；未成层墨迹由"未分类墨迹残层"承载。
     gray_lr = cv2.cvtColor(src_lr, cv2.COLOR_BGR2GRAY)
     bg_median = float(np.median(gray_lr))
-    ink_gray = (gray_lr < bg_median - 20.0).astype(np.uint8) * 255
+    # 墨迹判定阈值（2026-09-16）：paper/gold 等模式沿用 -20（历史校准值）；
+    # **fabric_substrate 会整幅重构底板** → 底板上每一处源图墨迹都必须有层承载，
+    # 若仍用 -20，审计口径（tools/audit_psb.py 的 -12）的淡墨会整片"被抹除却无层承载"
+    # （实测真·可平铺纹样 ④ 8.5% 墨迹丢失）。故全重建底板模式下与审计口径对齐（-12）。
+    # 实证：5 个金标准 preset 均非 fabric_substrate → 此分支不影响既有产物（字节不变）。
+    ink_cut = 12.0 if preset.get("background_mode") == "fabric_substrate" else 20.0
+    ink_gray = (gray_lr < bg_median - ink_cut).astype(np.uint8) * 255
     ink_all = cv2.bitwise_or(ink_gray, total_fg)
     seam_key = next((k for k in masks_dict if "seam" in k.lower() or "fold" in k.lower()), None)
     if seam_key is not None:
         ink_all = cv2.bitwise_and(ink_all, cv2.bitwise_not(masks_dict[seam_key]))
+    if rejected_ink is not None:
+        # 被白名单拒绝的检出层墨迹并入去墨/残层口径：品类不符不成层，但内容不丢
+        #（修复 textile_damask 可平铺纹样 ④ 9.48% 墨迹丢失；金标准 5 例零丢弃，不受影响）
+        ink_all = cv2.bitwise_or(ink_all, rejected_ink)
+        print(f"  -> [被拒掩模墨迹] {np.count_nonzero(rejected_ink):,}px "
+              f"({np.count_nonzero(rejected_ink)/ink_all.size*100:.2f}%) 并入去墨/残层口径"
+              f"（品类不符不成层，但内容不丢）")
     print(f"  -> [底板去墨] 双保险掩模覆盖 {np.count_nonzero(ink_all)/ink_all.size*100:.1f}% "
           f"（灰阶墨迹 {np.count_nonzero(ink_gray)/ink_gray.size*100:.1f}% ∪ 语义层 "
           f"{np.count_nonzero(total_fg)/total_fg.size*100:.1f}%），折痕保留")
