@@ -8,7 +8,7 @@
 - **必须用系统 Python 3.12.10**：
   `C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe`
   （WorkBuddy managed 3.13.12 **无 numpy**）。已装 numpy/sklearn/cv2/PIL/psd_tools/pytoshop/skimage。
-- 引擎全量：`py -m pytest tests/ -q`（基线 **279 passed / 4 skipped**）
+- 引擎全量：`py -m pytest tests/ -q`（基线 **281 passed / 4 skipped**）
 - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`
   （**不可加 `-t`**，否则 base 模块 import 失败；**41 OK**）
 - Git Bash 缺 `tail`/`head`/`ls`；`rm` 被 safe-delete 钩子拦截（exit 127）
@@ -147,7 +147,7 @@
   —— 背景带天然跨全幅 bbox=100%，**不豁免会被弥散门静默拒绝**（第一轮 e2e 实测）。
 - **实测**：样块 ROI 80.9%、DINO 在样块区内**确实检出团花**、图层 7、**8 维审计全过 exit=0**、
   ④ lost 0.000472、⑤ rmse_lowfreq 13.1、**cold/repeat 字节可复现**（SHA `d62dbeef…`）。
-- **基线**：引擎 **279 passed / 4 skipped**；WebUI **41 OK**。
+- **基线**：引擎 **281 passed / 4 skipped**；WebUI **41 OK**。
   新增测试类 `TestAlphaChannelLayout` / `TestLayerRgbConversion` /
   `TestProcessLayersExcludedFromCarrier`（`tests/test_audit_psb.py`）。
 

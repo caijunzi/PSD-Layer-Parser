@@ -143,6 +143,55 @@ class TestGoldenScreenGold(unittest.TestCase):
         """
         self.skipTest("需要真实引擎运行产生的 episode 归档（outputs/ 不入库）——由端到端审计承担")
 
+    def test_golden_baseline_is_real_data(self):
+        """基线必须是**真实测量值**（2026-09-16 重提后加防腐）。
+
+        旧基线的教训：`total_size_mb=0.0`、`backend='unknown'` 从未被填真值，
+        等于拿一份失真数据做"不退化"比对。本测试锁死：每条基线必须有
+        正的产物体积、完整的 8 维逐维判定，且关键指标落在合理区间。
+        """
+        data = json.loads(BASELINE.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(data), 5, "基线任务数不足（应覆盖 5 个金标准）")
+        for tid, v in data.items():
+            self.assertGreater(float(v.get("total_size_mb", 0)), 1.0,
+                               f"{tid}: total_size_mb 未填真值（<=1MB）")
+            self.assertTrue(v.get("passed"), f"{tid}: 基线任务本身未通过 8 维审计")
+            dp = v.get("dims_passed") or {}
+            self.assertEqual(len(dp), 8, f"{tid}: dims_passed 应记录 8 维（实际 {len(dp)}）")
+            self.assertTrue(all(dp.values()), f"{tid}: 基线的 8 维存在失败项 {dp}")
+            self.assertLess(float(v.get("lost_ratio", 1)), 0.05,
+                            f"{tid}: lost_ratio 异常偏大")
+            self.assertGreater(int(v.get("n_layers", 0)), 3, f"{tid}: 图层数异常")
+
+    def test_regression_mechanism_against_real_baseline(self):
+        """用真实基线跑一次回归测试器：金标准对自身必须零回归（机制 + 数据双验证）。"""
+        import os
+        import tempfile
+        cur = tempfile.NamedTemporaryFile(suffix=".audit.json", delete=False)
+        cur.close()
+        try:
+            # 以 golden_screen 的基线值构造一份"当前审计"（与基线同值 → 应零回归）
+            base = json.loads(BASELINE.read_text(encoding="utf-8"))["golden_screen"]
+            audit = {
+                "passed": True, "psb": None,
+                "dims": {
+                    "④ 内容承载": {"passed": True, "metrics": {"lost_ratio": base["lost_ratio"]}},
+                    "⑤ 合成等价性": {"passed": True, "metrics": {
+                        "rmse_raw": base["rmse_raw"], "rmse_lowfreq": base["rmse_lowfreq"]}},
+                    "⑦ plate 合规": {"passed": True, "metrics": {
+                        "plate_purity_ok": base["plate_purity_ok"],
+                        "tac_max_pct": base["tac_max_pct"]}},
+                    "① 层属性": {"passed": True, "metrics": {"layer_count": base["n_layers"]}},
+                },
+            }
+            with open(cur.name, "w", encoding="utf-8") as f:
+                json.dump(audit, f, ensure_ascii=False)
+            r = run_regression_test(cur.name, "golden_screen",
+                                    baseline_path=str(BASELINE))
+            self.assertTrue(r["passed"], f"同值重放应零回归，实际 issues={r['issues']}")
+        finally:
+            os.unlink(cur.name)
+
     def test_audit_metrics_no_regression(self):
         """审计不退化：**回归测试器机制自检**（不再永久跳过）。
 

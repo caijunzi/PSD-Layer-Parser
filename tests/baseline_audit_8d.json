@@ -1,52 +1,107 @@
 {
-  "task_20260912_132516_371e55": {
-    "lost_ratio": 0.0,
-    "rmse_raw": 23.83,
-    "rmse_lowfreq": 17.21,
+  "golden_screen": {
+    "lost_ratio": 0.002692,
+    "rmse_raw": 3.35,
+    "rmse_lowfreq": 1.99,
     "plate_purity_ok": true,
-    "tac_max_pct": 300.0,
+    "tac_max_pct": 0.0,
     "n_layers": 42,
-    "total_size_mb": 0.0,
-    "backend": "unknown"
+    "total_size_mb": 106.1,
+    "backend": "unknown",
+    "passed": true,
+    "dims_passed": {
+      "① 层属性": true,
+      "② 分辨率真实性": true,
+      "③ 实例重复": true,
+      "④ 内容承载": true,
+      "⑤ 合成等价性": true,
+      "⑥ 底板纯净度": true,
+      "⑦ plate 合规": true,
+      "⑧ manifest 一致": true
+    }
   },
-  "task_20260913_122144_d023f4": {
-    "lost_ratio": 0.0,
-    "rmse_raw": 4.84,
-    "rmse_lowfreq": 0.7,
-    "plate_purity_ok": true,
-    "tac_max_pct": 300.0,
-    "n_layers": 10,
-    "total_size_mb": 0.0,
-    "backend": "unknown"
-  },
-  "task_20260913_120555_b2b831": {
-    "lost_ratio": 0.0,
-    "rmse_raw": 11.48,
-    "rmse_lowfreq": 5.22,
+  "golden_ink_song": {
+    "lost_ratio": 0.00393,
+    "rmse_raw": 6.74,
+    "rmse_lowfreq": 2.53,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
     "n_layers": 9,
-    "total_size_mb": 0.0,
-    "backend": "unknown"
+    "total_size_mb": 57.494,
+    "backend": "unknown",
+    "passed": true,
+    "dims_passed": {
+      "① 层属性": true,
+      "② 分辨率真实性": true,
+      "③ 实例重复": true,
+      "④ 内容承载": true,
+      "⑤ 合成等价性": true,
+      "⑥ 底板纯净度": true,
+      "⑦ plate 合规": true,
+      "⑧ manifest 一致": true
+    }
   },
-  "task_20260913_103835_3cfc3b": {
-    "lost_ratio": 0.0,
-    "rmse_raw": 23.83,
-    "rmse_lowfreq": 17.21,
+  "golden_oil": {
+    "lost_ratio": 0.003771,
+    "rmse_raw": 6.99,
+    "rmse_lowfreq": 3.04,
     "plate_purity_ok": true,
-    "tac_max_pct": 300.0,
-    "n_layers": 42,
-    "total_size_mb": 0.0,
-    "backend": "unknown"
+    "tac_max_pct": 0.0,
+    "n_layers": 8,
+    "total_size_mb": 70.079,
+    "backend": "unknown",
+    "passed": true,
+    "dims_passed": {
+      "① 层属性": true,
+      "② 分辨率真实性": true,
+      "③ 实例重复": true,
+      "④ 内容承载": true,
+      "⑤ 合成等价性": true,
+      "⑥ 底板纯净度": true,
+      "⑦ plate 合规": true,
+      "⑧ manifest 一致": true
+    }
   },
-  "task_20260912_122614_8ac9e5": {
-    "lost_ratio": 0.0,
-    "rmse_raw": 16.03,
-    "rmse_lowfreq": 8.12,
+  "golden_commercial": {
+    "lost_ratio": 0.000521,
+    "rmse_raw": 4.58,
+    "rmse_lowfreq": 1.67,
     "plate_purity_ok": true,
-    "tac_max_pct": 252.16,
-    "n_layers": 5,
-    "total_size_mb": 0.0,
-    "backend": "unknown"
+    "tac_max_pct": 0.0,
+    "n_layers": 12,
+    "total_size_mb": 83.821,
+    "backend": "unknown",
+    "passed": true,
+    "dims_passed": {
+      "① 层属性": true,
+      "② 分辨率真实性": true,
+      "③ 实例重复": true,
+      "④ 内容承载": true,
+      "⑤ 合成等价性": true,
+      "⑥ 底板纯净度": true,
+      "⑦ plate 合规": true,
+      "⑧ manifest 一致": true
+    }
+  },
+  "golden_silk": {
+    "lost_ratio": 4e-05,
+    "rmse_raw": 5.63,
+    "rmse_lowfreq": 1.86,
+    "plate_purity_ok": true,
+    "tac_max_pct": 0.0,
+    "n_layers": 7,
+    "total_size_mb": 50.466,
+    "backend": "unknown",
+    "passed": true,
+    "dims_passed": {
+      "① 层属性": true,
+      "② 分辨率真实性": true,
+      "③ 实例重复": true,
+      "④ 内容承载": true,
+      "⑤ 合成等价性": true,
+      "⑥ 底板纯净度": true,
+      "⑦ plate 合规": true,
+      "⑧ manifest 一致": true
+    }
   }
 }
