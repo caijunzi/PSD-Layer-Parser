@@ -129,8 +129,10 @@ def _recommend_preset(dimensions: Optional[dict],
                 gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
                 if detect_sample_panel_bbox(gray) is not None:
                     return "textile_damask_photo", 0.80
-        except Exception:
-            pass  # 检测不可用/失败 → 降级为宽高比判断，绝不影响上传
+        except Exception as _e:
+            # 检测不可用/失败 → 降级为宽高比判断，绝不影响上传；但**披露**原因，
+            # 避免"样品照没被识别"这种退化无声无息（P1-1 静默降级）。
+            print(f"[file_handler] 样块检测跳过，降级为宽高比推荐：{type(_e).__name__}: {_e}")
 
     if not dimensions:
         return "japanese_screen_gold", 0.5

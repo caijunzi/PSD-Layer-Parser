@@ -110,6 +110,20 @@ def _find_base_layer(layers, base_keywords=None):
 from engine.core.psd_layer_io import layer_alpha as _alpha, layer_rgb as _layer_rgb  # noqa: E402
 
 
+def _record_metric_failure(d: dict, dim_label: str, exc: BaseException) -> None:
+    """审计**指标计算失败**的显式处置：记录原因并 fail-closed。
+
+    ⚠️ 2026-09-16 修复：此前 ⑥/⑦ 的指标计算被 `except Exception: pass` 静默吞掉 ——
+    一旦抛错，指标从 metrics 里消失而该维度**仍报 passed=True**，等价于"审计说通过却没测量"。
+    这与 ⑦ `k_channel_nonzero_pct` 口径写反同类：都让审计**失去信号价值**。
+    审计算不出来时必须显式失败，不得静默放行。
+    """
+    msg = f"{type(exc).__name__}: {exc}"
+    d.setdefault("metrics", {})["metric_error"] = msg
+    d["passed"] = False
+    d.setdefault("issues", []).append(f"{dim_label} 指标计算失败（不得视为通过）：{msg}")
+
+
 def _full_mask(ly, H: int, W: int) -> np.ndarray:
     m = _alpha(ly.numpy()) > 0.03
     f = np.zeros((H, W), bool)
@@ -387,8 +401,8 @@ def audit(psb_path: str, manifest_path: str | None = None,
                     d["metrics"][f"dark_{rname}"] = round(float((s < med - TH["base_dark_delta"]).mean()) * 100, 2)
             d["metrics"]["note"] = ("分区域 dark 为品类相关指标（披露不判失败）；"
                                      "深查用 tools/calibrate_density_bands.py + 金标准")
-        except Exception:
-            pass
+        except Exception as _e:
+            _record_metric_failure(d, "⑥ 底板纯净度", _e)
     dims["⑥ 底板纯净度"] = d
 
     # ⑦ plate 合规
@@ -438,8 +452,8 @@ def audit(psb_path: str, manifest_path: str | None = None,
                 d["metrics"]["k_channel_nonzero_pct"] = round(float((kk < 0.999).mean()) * 100, 1)
                 d["metrics"]["k_channel_strong_pct"] = round(float((kk < 0.5).mean()) * 100, 1)
                 d["metrics"]["k_ink_mean_pct"] = round(float((1.0 - kk).mean()) * 100, 2)
-        except Exception:
-            pass
+        except Exception as _e:
+            _record_metric_failure(d, "⑦ plate 合规（K 版指标）", _e)
     else:
         d["metrics"]["color_mode"] = "rgb（design 线，plate 项不适用）"
         # design 线允许生成式补全（LaMa）；此处仅**披露**生成内容占比，
@@ -452,8 +466,8 @@ def audit(psb_path: str, manifest_path: str | None = None,
                 d["metrics"]["deocclusion_generative"] = _tot.get("deocclusion_generative")
                 if _tot.get("deocclusion_generative") is True:
                     d["metrics"]["note"] = "design 线含生成式补全；如需制版请走 plate 线（确定性）"
-            except Exception:
-                pass
+            except Exception as _e:
+                _record_metric_failure(d, "⑦ plate 合规（manifest 披露）", _e)
     dims["⑦ plate 合规"] = d
 
     # ⑧ manifest 一致性

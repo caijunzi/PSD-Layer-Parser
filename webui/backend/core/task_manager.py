@@ -337,8 +337,9 @@ class TaskManager:
                     "type": "audit", "task_id": task_id, "passed": None,
                     "error": f"{type(e).__name__}: {str(e)[:160]}",
                 })
-            except Exception:
-                pass
+            except Exception as _be:
+                # 广播失败不影响产物，但必须披露——否则前端"看不到审计结果"会被误认为"没审计"
+                print(f"[TaskManager] 审计事件广播失败（不影响产物）: {type(_be).__name__}: {str(_be)[:160]}")
 
     def _finalize_artifacts(self, task_id: str, out_dir: Path, audit_reports: dict,
                            mode: str = "both") -> None:

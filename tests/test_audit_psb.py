@@ -282,6 +282,33 @@ class TestBlackPlateMetric(unittest.TestCase):
         self.assertAlmostEqual(float((half < 0.999).mean()) * 100, 50.0, places=3)
 
 
+class TestAuditMetricFailureFailClosed(unittest.TestCase):
+    """审计**指标计算失败**必须 fail-closed（2026-09-16 修复静默吞异常）。
+
+    此前 ⑥/⑦ 的指标计算被 `except Exception: pass` 包裹：一旦抛错，指标静默消失而
+    维度仍报 passed=True —— 等价于"审计说通过却没测量"，与 ⑦ 口径写反同类事故。
+    """
+
+    def test_record_metric_failure_marks_dim_failed(self):
+        from tools.audit_psb import _record_metric_failure
+        d = {"passed": True, "metrics": {}, "issues": []}
+        _record_metric_failure(d, "⑦ plate 合规", ValueError("boom"))
+        self.assertFalse(d["passed"], "指标计算失败必须判失败")
+        self.assertEqual(d["metrics"]["metric_error"], "ValueError: boom")
+        self.assertTrue(d["issues"], "必须留下 issue 说明")
+        self.assertIn("不得视为通过", d["issues"][0])
+
+    def test_no_silent_pass_in_audit_dims(self):
+        """静态断言：审计维度内不得再出现空的 `except Exception: pass`。"""
+        import inspect
+        import re
+        from tools import audit_psb
+        src = inspect.getsource(audit_psb)
+        # 允许 docstring 描述，但不得存在「except 后紧跟 pass」的实际语句
+        bad = re.findall(r"except[^\n]*:\s*\n\s*pass\s*$", src, re.M)
+        self.assertEqual(bad, [], f"审计器内仍有静默吞异常：{bad}")
+
+
 class TestSharedLayerIoSingleSource(unittest.TestCase):
     """2026-09-16 根因修复：所有 PSD 层读取必须收敛到单一权威入口
     `engine.core.psd_layer_io`，杜绝散落的 `[:, :, 3]` / `[:, :, :3]` 索引假设。

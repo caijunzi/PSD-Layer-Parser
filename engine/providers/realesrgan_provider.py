@@ -159,8 +159,11 @@ class RealESRGANProvider:
                     ov_model.reshape([1, 3, -1, -1])
                     try:
                         ov.save_model(ov_model, self.xml_path)
-                    except Exception:
-                        pass
+                    except Exception as _sve:
+                        # 仅影响下次启动的加载速度（无缓存需重编译），不影响本次推理结果；
+                        # 但必须披露，否则"每次都重编译"这种性能退化无从察觉。
+                        print(f"[RealESRGANProvider] OV 模型缓存写入失败（不影响本次推理）: "
+                              f"{type(_sve).__name__}: {_sve}")
                     self.compiled_model = core.compile_model(ov_model, dev)
                     self.backend = f"openvino_{dev}_pytorch_native"
                     print(f"[RealESRGANProvider] Active device: [{dev}] (pytorch native)")
