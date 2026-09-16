@@ -969,6 +969,22 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
               f"({n_unassigned/unassigned.size*100:.2f}%) 已作为独立层承载（避免内容丢失）")
     else:
         print("  -> [未分类墨迹残层] 无残留（语义层已覆盖全部墨迹）")
+    # 取证 dump（默认关闭）：ULS_DUMP_MASKS_DIR 指向目录时导出 ④ 内容承载相关的
+    # 全部中间掩模（LR 域、与 plate 同分辨率），供离线像素级取证使用。
+    _dump_dir = os.environ.get("ULS_DUMP_MASKS_DIR")
+    if _dump_dir:
+        os.makedirs(_dump_dir, exist_ok=True)
+        np.savez_compressed(
+            os.path.join(_dump_dir, "step2_masks.npz"),
+            unassigned=unassigned,
+            total_fg=total_fg,
+            ink_all=ink_all,
+            ink_gray=ink_gray,
+            rejected_ink=(rejected_ink if rejected_ink is not None
+                          else np.zeros_like(unassigned)),
+            seam=(masks_dict.get(seam_key) if seam_key else np.zeros_like(unassigned)),
+        )
+        print(f"  -> [dump] ④ 取证中间掩模已导出: {_dump_dir}")
     t_step2 = time.time() - t0
 
     # -------------------------------------------------------------
