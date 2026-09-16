@@ -1,12 +1,12 @@
 {
   "golden_screen": {
-    "lost_ratio": 0.002692,
+    "lost_ratio": 1.8e-05,
     "rmse_raw": 3.35,
     "rmse_lowfreq": 1.99,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
-    "n_layers": 42,
-    "total_size_mb": 106.1,
+    "n_layers": 43,
+    "total_size_mb": 109.153,
     "backend": "unknown",
     "passed": true,
     "dims_passed": {
@@ -21,13 +21,13 @@
     }
   },
   "golden_ink_song": {
-    "lost_ratio": 0.00393,
+    "lost_ratio": 0.000114,
     "rmse_raw": 6.74,
     "rmse_lowfreq": 2.53,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
     "n_layers": 9,
-    "total_size_mb": 57.494,
+    "total_size_mb": 57.105,
     "backend": "unknown",
     "passed": true,
     "dims_passed": {
@@ -42,13 +42,13 @@
     }
   },
   "golden_oil": {
-    "lost_ratio": 0.003771,
+    "lost_ratio": 0.000418,
     "rmse_raw": 6.99,
     "rmse_lowfreq": 3.04,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
     "n_layers": 8,
-    "total_size_mb": 70.079,
+    "total_size_mb": 70.263,
     "backend": "unknown",
     "passed": true,
     "dims_passed": {
@@ -63,13 +63,13 @@
     }
   },
   "golden_commercial": {
-    "lost_ratio": 0.000521,
+    "lost_ratio": 6e-06,
     "rmse_raw": 4.58,
     "rmse_lowfreq": 1.67,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
     "n_layers": 12,
-    "total_size_mb": 83.821,
+    "total_size_mb": 83.799,
     "backend": "unknown",
     "passed": true,
     "dims_passed": {
@@ -84,13 +84,13 @@
     }
   },
   "golden_silk": {
-    "lost_ratio": 4e-05,
+    "lost_ratio": 0.0,
     "rmse_raw": 5.63,
     "rmse_lowfreq": 1.86,
     "plate_purity_ok": true,
     "tac_max_pct": 0.0,
     "n_layers": 7,
-    "total_size_mb": 50.466,
+    "total_size_mb": 50.622,
     "backend": "unknown",
     "passed": true,
     "dims_passed": {

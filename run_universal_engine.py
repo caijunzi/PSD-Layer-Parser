@@ -664,7 +664,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
                     print(f"[Adaptive] episode 归档失败（不影响主流程）: {ae}")
         except Exception as e:
             print(f"[Adaptive] 自适应语义失败（降级到原 preset）: {e}")
-    
+
     # ⚠️ cv2.imread 对含非 ASCII 字符的路径（如中文工作区）会静默返回 None——
     # 用户从 IDE / 一键 bat 传绝对路径是常态，必须走 Unicode 安全读取
     src_lr = imread_unicode(input_path)
@@ -926,7 +926,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
         mode=preset.get("background_mode", "paper_or_gold_screen"),
         inpainting_provider=inpaint_provider
     )
-    
+
     total_fg = np.zeros((h_lr, w_lr), dtype=np.uint8)
     for mname, m in masks_dict.items():
         mname_lower = mname.lower()
@@ -947,8 +947,12 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # 若仍用 -20，审计口径（tools/audit_psb.py 的 -12）的淡墨会整片"被抹除却无层承载"
     # （实测真·可平铺纹样 ④ 8.5% 墨迹丢失）。故全重建底板模式下与审计口径对齐（-12）。
     # 实证：5 个金标准 preset 均非 fabric_substrate → 此分支不影响既有产物（字节不变）。
-    ink_cut = 12.0 if preset.get("background_mode") == "fabric_substrate" else 20.0
-    ink_gray = (gray_lr < bg_median - ink_cut).astype(np.uint8) * 255
+    # 墨迹判定差与交付审计 ④ 同源（engine.core.constants.INK_GRAY_DELTA）。
+    # 2026-09-16 决定性实验：统一 -20 时 textile_damask@scale4 ④=4.06% 不达标
+    # （scale4 底板经生成式超分整体重渲染 → erased 天然膨胀 → 引擎墨迹口径必须
+    # 完整覆盖审计墨迹）；统一 -12 → ④=0.00%。故移除 background_mode 分支、全模式对齐。
+    from engine.core.constants import INK_GRAY_DELTA
+    ink_gray = (gray_lr < bg_median - INK_GRAY_DELTA).astype(np.uint8) * 255
     ink_all = cv2.bitwise_or(ink_gray, total_fg)
     seam_key = next((k for k in masks_dict if "seam" in k.lower() or "fold" in k.lower()), None)
     if seam_key is not None:
@@ -1004,7 +1008,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     print("\n[第 3 步/共 6 步] 2.5D 层序深度拓扑排序 (2.5D Layer Depth & Topology Sorting)...")
     sorter = UniversalLayerSorter()
     sorted_layers = sorter.sort_layers(masks_dict, src_lr)
-    
+
     # 层序规范化（2026-09-12 深度审计修复）：
     # 原实现直接沿用深度排序器输出，实例层（04C_03/_05/_04…、08_雁_09/_01…）
     # 与语义层交错，设计师在 PS 中找层困难（实测 39/43 层与规范顺序不符）。
@@ -1052,7 +1056,7 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     # -------------------------------------------------------------
     t0 = time.time()
     print("\n[第 4 步/共 6 步] 2.5D 遮挡定向补全与重建区标定 (De-occlusion & Reconstruction Marking)...")
-    
+
     # 纯动态 2.5D 定向遮挡补全（由 DeocclusionOperator 与 LaMa/Telea 算子实时执行）
 
     from engine.operators.deocclusion_operator import DeocclusionOperator
@@ -1124,10 +1128,10 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     def process_single_layer(lyr):
         name = lyr["name"]
         m_lr = lyr["mask"]
-        
+
         # 【方案 A 纯动态计算】废除任何 masks_16k/*.png 直读，100% 走真实引导滤波超分！
         hr_m = super_res.guided_upsample_mask(m_lr, guide_hr_gray, radius=6, eps=1e-3)
-            
+
         if lyr.get("inpainted_bgr") is not None:
             hr_bgr = super_res.upscale_image_progressive(lyr["inpainted_bgr"], stages=stages)
         else:

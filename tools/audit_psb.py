@@ -325,9 +325,10 @@ def audit(psb_path: str, manifest_path: str | None = None,
         # 不存在的"墨迹"，LR 二值掩模管线结构性无法覆盖（实测 textile_damask@scale4
         # lost 虚高至 6.41%，且 lost 100% 位于引擎 ink_all 之外；scale1 产物尺寸==源
         # 尺寸时结果不变）。
+        from engine.core.constants import INK_GRAY_DELTA
         src_gray_native = cv2.cvtColor(src, cv2.COLOR_RGB2GRAY)
         _med = float(np.median(src_gray_native))
-        _ink_native = (src_gray_native < (_med - 12)).astype(np.uint8) * 255
+        _ink_native = (src_gray_native < (_med - INK_GRAY_DELTA)).astype(np.uint8) * 255
         if (W, H) == (_ink_native.shape[1], _ink_native.shape[0]):
             ink = _ink_native > 0
         elif W >= _ink_native.shape[1]:
