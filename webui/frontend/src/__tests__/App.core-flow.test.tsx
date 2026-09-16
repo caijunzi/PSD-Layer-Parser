@@ -174,6 +174,33 @@ describe('App 核心交互：上传 → AI 推荐 → 提交', () => {
     expect(await screen.findByText(/正在处理/)).toBeTruthy()
   })
 
+  it('参数面板：中文主标签 + 白话说明，不留术语缩写（both / RK-16）', async () => {
+    await uploadAndReachReady()
+    const text = (document.body.textContent || '')
+    for (const label of ['输出模式', '放大倍率', '印刷精度', '随机种子', '算力档位']) {
+      expect(text).toContain(label)
+    }
+    // 不再出现英文缩写 / 内部编号
+    expect(text).not.toContain('双线 both')
+    expect(text).not.toMatch(/\bboth\b/)
+    expect(text).not.toContain('RK-16')
+    // 硬件档位改为中文可读标签
+    expect(text).toContain('5070 独显')
+    expect(text).toContain('arc 核显')
+    expect(text).toContain('cpu 纯 CPU')
+    // 每个参数都有一个可展开的说明入口
+    expect(document.querySelectorAll('button[aria-label="查看参数说明"]').length).toBe(5)
+  })
+
+  it('物理尺寸单位口径正确：≥1000mm 显示为「米」（原缺陷：算米却标 mm，差 1000 倍）', async () => {
+    await uploadAndReachReady()  // fixture: 2848×1600，默认 scale 4 / dpi 150
+    // 2848 × 4 / 150 × 25.4 = 1929.3 mm → 应显示 1.93 米
+    expect((document.body.textContent || '')).toContain('1.93 米')
+    expect((document.body.textContent || '')).not.toMatch(/成品宽\s*2\s*mm/)
+    // 动态像素尺寸预览
+    expect((document.body.textContent || '')).toContain('11392 × 6400')
+  })
+
   it('推荐驱动的自动选中：上传响应给什么推荐，提交就用什么 preset（防假自动选中）', async () => {
     calls.length = 0
     vi.stubGlobal(

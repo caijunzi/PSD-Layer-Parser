@@ -63,7 +63,73 @@ const fmtSize = (n: number) => {
 const MODE_LABELS: Record<string, string> = {
   design: '设计线 RGB',
   plate: '制版线 CMYK',
-  both: '双线 both',
+  both: '双线（两份都出）',
+}
+
+/** 输出模式的新手向说明：一句话讲清「产出什么、给谁用」（避免 only 英文缩写） */
+const MODE_HELP: Record<string, { title: string; tag: string; desc: string }> = {
+  design: {
+    title: '设计线 RGB',
+    tag: '屏幕 / 喷墨 / 办公打印',
+    desc: '产出常规 RGB 彩色文件，交给设计稿、效果图、普通彩打使用。',
+  },
+  plate: {
+    title: '制版线 CMYK',
+    tag: '印刷厂印前制版',
+    desc: '产出 CMYK 印刷分色文件（含黑版，已做总墨量合规），直接交印刷厂。',
+  },
+  both: {
+    title: '双线（两份都出）',
+    tag: '一次出两份 · 耗时≈两者之和',
+    desc: '同时产出设计线与制版线两份文件，适合既要看效果又要送印的场景。',
+  },
+}
+
+/** 算力档位（性能 vs 稳定性）——依据 engine/schemas/profile_config.py 的真实语义改写为人话 */
+const PROFILE_META: Record<string, { label: string; hint: string; desc: string }> = {
+  robust_performance: {
+    label: '稳健（推荐）',
+    hint: '独显主力 + 核显兜底',
+    desc: '独立显卡主算，核显的大显存做安全垫，并有超时自愈：速度与稳定性兼顾，日常首选。',
+  },
+  '5070': {
+    label: '5070 独显',
+    hint: '最快',
+    desc: '强制全部用独立显卡（RTX 5070）计算，速度最快；超大画幅时有显存不足的风险。',
+  },
+  arc: {
+    label: 'arc 核显',
+    hint: '大显存最不易崩',
+    desc: '使用核显共享的 16GB 内存，超大图最不容易因显存不足中断；速度中等。',
+  },
+  cpu: {
+    label: 'cpu 纯 CPU',
+    hint: '最兼容 · 最慢',
+    desc: '全部用 CPU 计算，不依赖显卡驱动，兼容性最好、结果最保守；耗时明显更长。',
+  },
+}
+
+/** 参数行的小问号（点击展开白话说明）——不引入任何新依赖 */
+function HelpTip({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="查看参数说明"
+        aria-expanded={open}
+        className="ml-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-neutral-600 align-middle text-[10px] leading-none text-neutral-400 transition-colors hover:border-blue-400 hover:text-blue-300"
+      >
+        ?
+      </button>
+      {open && (
+        <span className="mt-1.5 block rounded-lg border border-neutral-700 bg-neutral-900/70 px-3 py-2 text-[11px] font-normal leading-relaxed text-neutral-300">
+          {children}
+        </span>
+      )}
+    </>
+  )
 }
 
 /** /api/history 条目（此前为孤儿端点：后端可用、前端零调用 → 刷新后看不到历史任务） */
@@ -600,33 +666,75 @@ export default function App() {
 
             {/* 参数 */}
             <div className="rounded-2xl border border-neutral-800 bg-neutral-800/40 p-5">
-              <h4 className="mb-4 text-sm font-semibold text-neutral-300">输出参数</h4>
+              <h4 className="mb-1 text-sm font-semibold text-neutral-300">输出参数</h4>
+              <p className="mb-4 text-[11px] leading-relaxed text-neutral-500">
+                下面 5 项决定成品文件的<b className="text-neutral-400">用途、清晰度与大小</b>。
+                不确定时保持默认即可；点某项后的 <span className="rounded-full border border-neutral-600 px-1 text-[10px]">?</span> 看白话解释。
+              </p>
 
+              {/* 1. 输出模式 */}
               <div className="mb-4">
                 <label className="mb-1.5 block text-xs text-neutral-400">
-                  <b className="text-neutral-200">输出模式</b>
+                  <b className="text-neutral-200">输出模式</b>——要出哪种成品文件
+                  <HelpTip>
+                    <b className="text-neutral-200">RGB 与 CMYK 的区别</b>：
+                    RGB（设计线）是屏幕与普通彩色打印用的颜色；CMYK（制版线）是印刷厂
+                    分色制版用的颜色，含"黑版"，并已把总墨量控制在印刷可承受范围内。
+                    拿不准时选<b className="text-neutral-200">双线</b>，两份都会给你。
+                  </HelpTip>
                 </label>
-                <div className="flex gap-1 rounded-lg border border-neutral-700 bg-neutral-900 p-1">
-                  {(['design', 'plate', 'both'] as const).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setMode(m)}
-                      className={
-                        'flex-1 rounded-md px-2 py-1.5 text-xs transition-all ' +
-                        (mode === m
-                          ? 'bg-blue-500 font-semibold text-white shadow shadow-blue-500/40'
-                          : 'text-neutral-400 hover:text-neutral-200')
-                      }
-                    >
-                      {MODE_LABELS[m]}
-                    </button>
-                  ))}
+                <div className="space-y-1.5">
+                  {(['design', 'plate', 'both'] as const).map((m) => {
+                    const H = MODE_HELP[m]
+                    const on = mode === m
+                    return (
+                      <button
+                        key={m}
+                        onClick={() => setMode(m)}
+                        className={
+                          'w-full rounded-lg border px-3 py-2 text-left transition-all ' +
+                          (on
+                            ? 'border-blue-500 bg-blue-500/15 shadow shadow-blue-500/20'
+                            : 'border-neutral-700 bg-neutral-900 hover:border-neutral-600')
+                        }
+                      >
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={
+                              'text-xs font-semibold ' + (on ? 'text-blue-200' : 'text-neutral-300')
+                            }
+                          >
+                            {H.title}
+                          </span>
+                          <span
+                            className={
+                              'rounded-full border px-1.5 py-0.5 text-[10px] ' +
+                              (on
+                                ? 'border-blue-400/40 bg-blue-500/10 text-blue-200'
+                                : 'border-neutral-700 text-neutral-500')
+                            }
+                          >
+                            {H.tag}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-relaxed text-neutral-500">
+                          {H.desc}
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
 
+              {/* 2. 放大倍率 */}
               <div className="mb-4">
                 <label className="mb-1.5 block text-xs text-neutral-400">
-                  <b className="text-neutral-200">放大倍率</b> · {scale.toFixed(1)}×
+                  <b className="text-neutral-200">放大倍率</b> · {scale.toFixed(1)}×——成品比原图大多少
+                  <HelpTip>
+                    成品像素尺寸 = 原图尺寸 × 倍率。倍率越高，细节越多、可印尺寸越大，
+                    但文件体积与处理时间也随之上升。倍率超过原图能提供的细节上限时，
+                    多出来的细节由算法推算（放大越猛，推算成分越多）。
+                  </HelpTip>
                 </label>
                 <input
                   type="range"
@@ -637,14 +745,32 @@ export default function App() {
                   onChange={(e) => setScale(parseFloat(e.target.value))}
                   className="w-full accent-blue-500"
                 />
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  {uploadInfo?.dimensions
+                    ? <>成品约 <b className="text-neutral-300">{(uploadInfo.dimensions.width * scale).toFixed(0)} × {(uploadInfo.dimensions.height * scale).toFixed(0)}</b> 像素
+                      <span className="text-neutral-600">（原图 {uploadInfo.dimensions.width} × {uploadInfo.dimensions.height}）</span></>
+                    : '上传图片后这里会显示成品的实际像素尺寸'}
+                  <span className="text-neutral-600"> · 倍率越高越慢、文件越大</span>
+                </p>
               </div>
 
+              {/* 3. 印刷精度 */}
               <div className="mb-4">
                 <label className="mb-1.5 block text-xs text-neutral-400">
-                  <b className="text-neutral-200">输出分辨率 (DPI)</b> · {dpi} PPI · 物理宽{' '}
-                  {uploadInfo?.dimensions && dpi > 0
-                    ? ((uploadInfo.dimensions.width * scale / dpi) * 25.4 / 1000).toFixed(0)
-                    : '—'}{' '}mm
+                  <b className="text-neutral-200">印刷精度（DPI）</b> · {dpi} · 成品宽{' '}
+                  {/* 2026-09-17 修正单位口径：原式算得的是**米**（宽px / DPI × 25.4 / 1000），
+                      却标注为 mm（差 1000 倍，如 11392px@150DPI 实为 1.93 米，旧 UI 显示 "2 mm"）。 */}
+                  {(() => {
+                    if (!uploadInfo?.dimensions || dpi <= 0) return '—'
+                    const mm = (uploadInfo.dimensions.width * scale / dpi) * 25.4
+                    return mm >= 1000 ? `${(mm / 1000).toFixed(2)} 米` : `${mm.toFixed(0)} 毫米`
+                  })()}
+                  <HelpTip>
+                    DPI（每英寸点数）表示"印出来一英寸里有多少个像素点"，决定打印精细度：
+                    <b className="text-neutral-200">150</b> 适合常规印刷与海报；
+                    <b className="text-neutral-200">300</b> 适合高清画册、近距离观看的成品。
+                    DPI 只影响"印多大"，不改变像素总数。
+                  </HelpTip>
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -667,47 +793,78 @@ export default function App() {
                           : 'border-neutral-700 text-neutral-400 hover:text-neutral-200')
                       }
                     >
-                      {v === 150 ? '150 标准' : '300 精细'}
+                      {v === 150 ? '150 常规印刷' : '300 高清画册'}
                     </button>
                   ))}
                 </div>
-                <p className="mt-1.5 text-[11px] text-neutral-600">
-                  {dpi} DPI 出产时源图有效分辨率 {dpi > 0 ? Math.round(dpi / scale) : '—'} PPI
-                  （4× 放大极限，如实披露）
+                <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500">
+                  按当前设置，成品每英寸的像素由原图的 <b className="text-neutral-400">{dpi > 0 ? Math.round(dpi / scale) : '—'}</b> 个点构成
+                  {dpi > 0 && dpi / scale < 150
+                    ? <>：低于 150 → <span className="text-amber-300/80">多出的细节由算法推算</span>（放大倍率调低可提升原生细节）</>
+                    : <>：达到常规印刷所需的细节水平</>}
                 </p>
               </div>
 
               <div className="mb-4">
                 <label className="mb-1.5 block text-xs text-neutral-400">
-                  <b className="text-neutral-200">随机种子</b> · 同 seed 逐像素可复现（RK-16）
+                  <b className="text-neutral-200">随机种子</b>——复现编号
+                  <HelpTip>
+                    引擎在放大与补全时含少量随机性。填同一个编号 + 同样参数，两次出图会
+                    <b className="text-neutral-200">完全一致</b>（便于对比与追溯）；换个编号，细节会变。
+                    <b className="text-neutral-200">留空</b>则每次都随机。
+                  </HelpTip>
                 </label>
                 <input
                   type="text"
                   value={seed}
+                  placeholder="留空 = 每次随机"
                   onChange={(e) => setSeed(e.target.value.replace(/[^0-9]/g, ''))}
-                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 font-mono text-sm outline-none focus:border-blue-500"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 font-mono text-sm outline-none placeholder:font-sans placeholder:text-neutral-600 focus:border-blue-500"
                 />
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  想复现某次结果，就填它当时用的编号；随手换编号即可得到不同细节版本。
+                </p>
               </div>
 
               <div>
                 <label className="mb-1.5 block text-xs text-neutral-400">
-                  <b className="text-neutral-200">性能档位</b>
+                  <b className="text-neutral-200">算力档位</b>——用哪种计算资源（速度与稳定性的取舍）
+                  <HelpTip>
+                    本机有三类算力：独立显卡（最快）、核显（显存最大）、CPU（最兼容）。
+                    档位只影响<b className="text-neutral-200">处理速度与稳定性</b>，
+                    不改变成品的颜色与图层结构。日常用「稳健」即可。
+                  </HelpTip>
                 </label>
-                <div className="flex gap-1 rounded-lg border border-neutral-700 bg-neutral-900 p-1">
-                  {['robust_performance', '5070', 'arc', 'cpu'].map((pf) => (
-                    <button
-                      key={pf}
-                      onClick={() => setProfile(pf)}
-                      className={
-                        'flex-1 rounded-md px-1 py-1.5 text-[11px] transition-all ' +
-                        (profile === pf
-                          ? 'bg-blue-500 font-semibold text-white'
-                          : 'text-neutral-400 hover:text-neutral-200')
-                      }
-                    >
-                      {pf === 'robust_performance' ? '稳健' : pf}
-                    </button>
-                  ))}
+                <div className="space-y-1.5">
+                  {(['robust_performance', '5070', 'arc', 'cpu'] as const).map((pf) => {
+                    const P = PROFILE_META[pf]
+                    const on = profile === pf
+                    return (
+                      <button
+                        key={pf}
+                        onClick={() => setProfile(pf)}
+                        className={
+                          'w-full rounded-lg border px-3 py-1.5 text-left transition-all ' +
+                          (on
+                            ? 'border-blue-500 bg-blue-500/15 shadow shadow-blue-500/20'
+                            : 'border-neutral-700 bg-neutral-900 hover:border-neutral-600')
+                        }
+                      >
+                        <span className="flex items-center gap-2">
+                          <span className={'text-xs font-semibold ' + (on ? 'text-blue-200' : 'text-neutral-300')}>
+                            {P.label}
+                          </span>
+                          <span className={
+                            'rounded-full border px-1.5 py-0.5 text-[10px] ' +
+                            (on ? 'border-blue-400/40 bg-blue-500/10 text-blue-200' : 'border-neutral-700 text-neutral-500')
+                          }>
+                            {P.hint}
+                          </span>
+                        </span>
+                        <span className="mt-0.5 block text-[11px] leading-relaxed text-neutral-500">{P.desc}</span>
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             </div>
