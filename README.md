@@ -28,7 +28,7 @@
 > ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
 > ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
 >    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
-> 当前回归基线：引擎 **260 passed / 5 skipped**，WebUI **37 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布**实物样品照**新增 `textile_damask_photo` preset，8 维审计全过（旧 `textile_damask` 混用导致的三层根因已逐条处置，见下方"壁布 plate 残余项"）。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
+> 当前回归基线：引擎 **273 passed / 5 skipped**，WebUI **40 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布**实物样品照**新增 `textile_damask_photo` preset，8 维审计全过（旧 `textile_damask` 混用导致的三层根因已逐条处置，见下方"壁布 plate 残余项"）。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
 > 本轮新增自适应字段桥接、审计回填、CBR 冷启动闭环和真实样本回归；最新九样本隔离 cold/repeat 证据见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整分析见 `docs/测试报告_20260915_全样本自适应链路收口.md`。历史首轮证据仍保留在 `outputs/adaptive-e2e-20260915-final/results.json`，油画 preset 修复后的独立复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`。
 
 ---
@@ -47,6 +47,21 @@
 | 油画（西洋古典） | `western_oil_painting.json` | ✅ Preset 完整（2026-09-11 新增）|
 
 超出范围转人工，不承诺任意图全自动（ADR-012）。
+
+**上传自动推荐 preset（2026-09-16 改为「材质家族优先」）**：`材质判别（指纹）→ 家族 →
+preset` 映射，样本实测 **10/10 正确**（此前只用宽高比，油画/水墨/绢本全被错荐为屏风）：
+
+| 材质家族 | 推荐 preset |
+|---|---|
+| 金地屏风 | `japanese_screen_gold` |
+| 绢本工笔 / 宣纸水墨 | `chinese_ink_landscape_ai`（**绢本必须用该 preset**，勿用 textile_damask） |
+| 油画布 | `western_oil_painting` |
+| 织物壁布（绗缝面料 / 壁布实物照 / 带实体样块的样品照） | `textile_damask_photo` |
+| 其他（家族置信 <0.6） | 退回宽高比粗判 |
+
+⚠️ **判据顺序即正确性**：**样块检测只在纺织类家族（绢本/织物）内做二次判定**。
+它曾是全局最高优先级，导致带绫边外框的**金地屏风**四条直边命中"长直边持续性"
+而被误判为实物样块 → 推荐成壁布 preset（已修）。
 
 最终业务流是三段：
 
@@ -87,7 +102,7 @@
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
 3. `inherit_priors()` 在 `category_priors` 为空时**优雅跳过**；有真实先验时才复制，不手写未经验证的 seed
 
-> 引擎全量测试基线已更新为 **260 passed / 5 skipped**；WebUI **37 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> 引擎全量测试基线已更新为 **273 passed / 5 skipped**；WebUI **40 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
 
 > **2026-09-16 修复批次（四项工程缺口）**：
 > ① **⑤ 合成等价性 CMYK 比对口径**：PLATE 产物是 ICC FOGRA39 真分色（有黑版），

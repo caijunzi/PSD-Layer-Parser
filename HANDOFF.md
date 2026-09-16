@@ -100,7 +100,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    原 `textile_damask` 面向**可平铺数码纹样**，**不用于实物样品照**（混用即 §9.2 C2 的失败）。
    ⚠️ §9.2 C2 曾记「壁布 ✅」，当时结论有误，以本条与 §10.4 为准。
 8. **提交状态**：2026-09-16 批次见 §10；提交前必跑两组全量测试
-   （当前引擎 **260 passed / 5 skipped** + WebUI **37 OK**）。
+   （当前引擎 **273 passed / 5 skipped** + WebUI **40 OK**）。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
 ## 9. 2026-09-15 P0–P2 修复批次（历史批次，最新请读 §10）
@@ -180,8 +180,8 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
 #        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
-py -m pytest tests/ -q                                        # 引擎 260 passed / 5 skipped
-py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 37 OK
+py -m pytest tests/ -q                                        # 引擎 273 passed / 5 skipped
+py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 40 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg
@@ -248,5 +248,29 @@ CBR 参数不自动注入生产（保护 RK-16）；`category_priors` 真实统�
 - ⚠️ **样本集已换代**：`inputs/damask_sample.png` 移除，改用 `工艺壁布-1/2/3.jpeg`
   （织物特写照，**无样块 → photo preset 全幅回退**，实测仍 8 维全过）。
 
-### 10.6 当前测试基线
-引擎 **260 passed / 5 skipped**（5 skip 源于样本换代）；WebUI **37 OK**。提交 **未 push**。
+### 10.6 静默降级深度审核 + 织物壁布族 + 推荐启发式（2026-09-16 第五批）
+- **新增静默降级审计** `tools/audit_degradation.py` + 棘轮门禁
+  `tests/test_no_silent_degradation.py`：P0 必须 0（preset 完整性 / 裸 except /
+  不认识 `imread_unicode` 却直接 `cv2.imread`），P1-1 静默吞异常须全部登记白名单。
+- **★ 修掉"审计说通过却没测量"**：`tools/audit_psb.py` ⑥/⑦ 原有 3 处
+  `except Exception: pass` 吞掉指标计算 → 指标静默消失而维度仍报 passed=True。
+  改为 `_record_metric_failure()`（记 `metric_error` + **fail-closed**）。
+  另 3 处（task_manager 审计事件广播 / file_handler 样块检测 / realesrgan OV 缓存）补披露。
+- **★ 新增材质家族「织物壁布」**：分类器此前只有 4 个绘画族 → `inputs/工艺壁布-1/2/3.jpeg`
+  全被误判为「宣纸水墨」。判据 = **近中性合取门（sat<15 且 b*<15）** +
+  **结构门（LBP 熵 ≥2.0）**（只靠中性会把噪声/纯色也吞进来）。
+- **★ `_recommend_preset` 改为「材质家族优先」**（顺序即正确性）：
+  家族 → preset 映射；**样块检测只在纺织类家族内做二次判定**（否则金地屏风的
+  绫边外框会命中"长直边持续性"被误判成实物样块）；置信 <0.6 才退回宽高比。
+  实测 **10/10 正确**（此前油画/水墨/绢本全错落到 japanese_screen_gold）。
+- **批次验收（ICC 补齐后，plate/scale1，均 8 维全过）**：
+  水墨宋代 ④0.001979 / ⑤1.28 / K非空87.3%；油画 ④0.000874 / ⑤3.09 / 97.2%；
+  金地 ④0.001607 / ⑤0.96 / 81.7%；工艺壁布×3 ④0.000364~0.000586 / ⑤1.65~19.29。
+- ⚠️ **行尾纪律（踩过的坑）**：仓库绝大多数文件是 **LF**，仅少数 CRLF。
+  编辑时必须**保留各文件既有行尾**；曾用"统一转 CRLF"脚本造成 15 个文件整文件
+  等量 +/- 的噪音 diff（需额外修正提交 `6e0cadb`）。自检：`git diff --numstat`
+  出现 **N+/N- 相等** 即噪音信号。另：Git Bash 下中文提交信息**必须 `git commit -F`**
+  （`-m` 中的反引号会被当命令替换）。
+
+### 10.7 当前测试基线
+引擎 **273 passed / 5 skipped**（5 skip 源于样本换代）；WebUI **40 OK**。提交 **未 push**。

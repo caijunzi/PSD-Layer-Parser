@@ -8,13 +8,22 @@
 - **必须用系统 Python 3.12.10**：
   `C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe`
   （WorkBuddy managed 3.13.12 **无 numpy**）。已装 numpy/sklearn/cv2/PIL/psd_tools/pytoshop/skimage。
-- 引擎全量：`py -m pytest tests/ -q`（基线 **260 passed / 5 skipped**）
+- 引擎全量：`py -m pytest tests/ -q`（基线 **273 passed / 5 skipped**）
 - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`
-  （**不可加 `-t`**，否则 base 模块 import 失败；**37 OK**）
+  （**不可加 `-t`**，否则 base 模块 import 失败；**40 OK**）
 - Git Bash 缺 `tail`/`head`/`ls`；`rm` 被 safe-delete 钩子拦截（exit 127）
   → 用 Python / PowerShell 删文件
 - `TEMP`/`TMP` 须指向同盘 `scratch/test-tmp-clean`，否则跨盘删除假失败
 - 输出含非 ASCII 时 Read 报 binary → 用 `.encode('ascii','replace')` 打印
+- **★ 行尾纪律（2026-09-16 实测踩坑，勿再犯）**：仓库**绝大多数文件是 LF**
+  （README/HANDOFF/`engine/**.py`/`presets/*.json`/`webui/backend/**`），仅少数是 CRLF
+  （`run_universal_engine.py`、`tools/audit_psb.py`、`docs/*.md`、`项目记忆.md`、
+  `.workbuddy/memory/*`）。**编辑/新增必须保留各文件既有行尾，绝不一刀切转 CRLF/LF** ——
+  曾用"统一转 CRLF"脚本造成 **15 个文件整文件等量 +/- 噪音**（如 material_classifier
+  344+/344-、README 308+/308-），真实改动被淹没，需额外一次修正提交。
+  **提交前自检**：`git diff --numstat` 若出现 **N+/N- 相等** 即行尾噪音信号。
+- **★ Git Bash 写中文提交信息必须 `git commit -F <file>`**：`-m` 参数里的 **反引号**会被
+  bash 当命令替换，导致信息被截断/`git add` 收到多余 pathspec 报错。
 - **★ `safe-delete` 钩子会杀死长跑引擎（2026-09-16 实测）**：WorkBuddy 的
   `cli/vendor/shim/sitecustomize.py` 在 Python 层劫持 `os.remove`，按 **turn 累计删除数**
   设阈值（`threshold=50`）；一旦本 turn 累计删除 >50，后续任何删除触发
@@ -138,6 +147,39 @@
   —— 背景带天然跨全幅 bbox=100%，**不豁免会被弥散门静默拒绝**（第一轮 e2e 实测）。
 - **实测**：样块 ROI 80.9%、DINO 在样块区内**确实检出团花**、图层 7、**8 维审计全过 exit=0**、
   ④ lost 0.000472、⑤ rmse_lowfreq 13.1、**cold/repeat 字节可复现**（SHA `d62dbeef…`）。
-- **基线**：引擎 **260 passed / 5 skipped**；WebUI **37 OK**。
+- **基线**：引擎 **273 passed / 5 skipped**；WebUI **40 OK**。
   新增测试类 `TestAlphaChannelLayout` / `TestLayerRgbConversion` /
   `TestProcessLayersExcludedFromCarrier`（`tests/test_audit_psb.py`）。
+
+## 8. ICC 黑版曲线 / 材质判别 / preset 推荐 / 降级门禁（2026-09-16）
+
+- **ICC 黑版生成曲线** `engine/core/black_generation.py`（GCR：K 曲线 + CMY 等量补偿；
+  **恒等零拷贝**保 RK-16）+ 标定工具 `tools/calibrate_black_generation.py`。
+  位置 **ICC 分色后、TAC 压制前**（`psb_builder._to_cmyk_limited`）。
+  ⚠️ `gamma>1` 是**减弱**中间调 K 墨量（`ink^gamma`），非加深。
+  标定：金地/油画**恒等最优**；**壁布样品照 `k_gain=1.1`**（K 非空 70.4→78.1%、
+  RMSE_low 0.910→**0.776**）。仅 `textile_damask_photo` 写入了该配置。
+- **★ 7 个 preset 全补 `icc_path=profiles/CoatedFOGRA39.icc`**：此前**只有
+  `japanese_screen_gold` 有**；`textile_damask` 更是「默认 PLATE 却缺 ICC」→ 一直跑朴素
+  RGB→CMYK（**K≡0、无真黑版、无色管**）。**ICC 只在该 preset 跑 PLATE 模式时使用**，
+  DESIGN 线不受影响。
+- **★ ⑦ `k_channel_nonzero_pct` 曾口径写反**：旧式判「K **呈色** >10%」→ K 全空与有墨
+  **都 ≈100%**，真黑版判定形同虚设（这正是"配置缺失→静默退化→审计放行"无人报警的原因）。
+  已改 `呈色<1`（存在黑墨）+ 新增 `k_ink_mean_pct` / `k_channel_strong_pct`。
+- **材质判别 6 族**：金地屏风 / 宣纸水墨 / 绢本工笔 / 油画布 / **织物壁布（新）** / 其他。
+  **织物判据 = 两道门**：① 近中性合取门 `sat<15 且 b*<15`；② **结构门 LBP 熵 ≥2.0**
+  （只靠中性会把噪声/纯色也吞进来：实测噪声 1.32、纯色 0.76；真织物 2.18~2.47）。
+  亮度不作判据（织物 L 跨 46~84）。真值 `inputs/工艺壁布-1/2/3.jpeg`。
+- **★ `file_handler._recommend_preset` 判据顺序 = 正确性（勿乱序）**：
+  1. **材质家族优先** `FAMILY_TO_PRESET`（金地→japanese_screen_gold；绢本/水墨→
+     chinese_ink_landscape_ai；油画→western_oil_painting；织物→textile_damask_photo）；
+  2. **样块检测只在纺织类家族内做二次判定**（`_TEXTILE_FAMILIES`={绢本工笔,织物壁布}）
+     —— 放全局会因**金地屏风的绫边外框**四条直边命中"长直边持续性"而误判成实物样块；
+  3. 家族置信 <0.6 才退回宽高比。实测 **10/10 正确**。
+- **静默降级审计** `tools/audit_degradation.py` + 门禁 `tests/test_no_silent_degradation.py`：
+  P0 必须 0（preset 完整性 / 裸 except / 不认识 `imread_unicode` 却直接 `cv2.imread`）；
+  P1-1 静默吞异常须全部登记白名单（附理由；**行号漂移会让门禁失败**，提醒复核）。
+  ⚠️ **审计器内指标计算失败必须 fail-closed**（`tools/audit_psb._record_metric_failure`），
+  否则"审计说通过却没测量"（⑥/⑦ 原有 3 处 `except: pass`）。
+- **批次验收（ICC 补齐后，plate/scale1）**：水墨宋代 ④0.001979/⑤1.28/K非空87.3%；
+  油画 ④0.000874/⑤3.09/97.2%；金地 ④0.001607/⑤0.96/81.7% —— **均 8 维全过**。
