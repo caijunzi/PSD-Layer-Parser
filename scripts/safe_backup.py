@@ -67,7 +67,7 @@ def main() -> int:
     check(restored == head, "恢复后 HEAD 一致（%s）" % restored[:12])
     rc, out = git("log", "--oneline", "-1", cwd=tmp)
     print("  恢复库最新提交:", out.strip()[:100])
-    check(out.strip().startswith(head), "恢复库最新提交与源一致")
+    check(out.strip().startswith(head[:12]), "恢复库最新提交与源一致")
 
     # 清理临时恢复库（safe-delete 钩子已用环境变量停用）
     shutil.rmtree(tmp, ignore_errors=True)
