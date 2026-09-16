@@ -1,8 +1,8 @@
 # HANDOFF — Ultra-Layer Studio（PSD 图层处理）
 
 > 换账号/换机器时的**唯一入口文档**。新会话第一句：先读 `HANDOFF.md`。
-> 深度细节在 `docs/`；项目日志在 `.workbuddy/memory/`。
-> 最后更新：2026-09-15 11:30 by WorkBuddy AI（P0–P2 修复批次；**请先读 §9**）
+> 深度细节在 `docs/`；项目日志在 `.workbuddy/memory/`；**完整项目记忆在 `<项目根>/项目记忆.md`**。
+> 最后更新：2026-09-16 by WorkBuddy AI（四项工程缺口修复 + 通道读取根因修复；**请先读 §10**）
 
 ---
 
@@ -46,6 +46,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 | `imagecodecs` 必须装 | SIMD RLE 加速；缺失回退纯 Python packbits（3MB/s vs 356MB/s，差 120×） |
 | 分割（DINO+SAM2）固定 CPU | 2026-09-13 实测：SAM2 单 `predict` GPU 反慢 6.88×、`set_image` 仅 1.30×，DINO（14 prompt）GPU 仅 1.18×，且破坏 RK-16 逐像素复现 → 维持 CPU。DINO 缺 `_C` 已加守卫（ms_deform_attn.py，CUDA 走纯 torch 回退，不再 NameError） |
 | ICC 用 `profiles/CoatedFOGRA39.icc` | 系统库无 Fogra39L；**禁止 FOGRA27 冒名 39L**（README 明令勿混用），生产需换官方 ISOcoated_v2_300_eci |
+| **PSD 层像素读取只用 `engine/core/psd_layer_io.py`** | `psd_tools` 的 `layer.numpy()` 通道数随色彩模式变：RGB→(H,W,**4**) Alpha 在 idx3；**CMYK→(H,W,5) Alpha 在 idx4**。写死 `[:, :, 3]` 在 CMYK(PLATE) 产物上取到 **K 通道** → ②③④⑥ 四维审计全错、防欺骗审计整体失效。`audit_psb._alpha` 是**别名**，勿写第二份实现；已有静态测试防回退 |
 
 ## 4. 分层能力现状（核心指标）
 
@@ -57,9 +58,13 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 | 水波（03） | ✅ 密度带（区域+密度区间） | density_band |
 | 渚上水木（05B） | ✅ prompt 迭代后命中 | SAM |
 | 外框 / 折痕 / 金地底板 | ✅ | 装饰检测 + 背景提取 |
-| **远山（04D）** | ❌ 源图对比度极低（肉眼勉强可辨），不可自动提取 | — |
-| **寒林枯木（05A）** | ❌ 细线结构与金地纹理信噪比重叠 | 待 Frangi 骨架流 |
-| 平渚（04B） | ❌ DINO 未命中（滩涂无边界） | — |
+| 寒林枯木（05A） | ✅ **区域先验 SAM 出 2 层**（1,045,404px / 319,411px，**无需 Frangi**） | region + SAM |
+| 平渚（04B） | ✅ **区域先验 SAM 出层**（637,903px） | region + SAM |
+| **远山（04D）** | ❌ 源图对比度极低（肉眼勉强可辨），**确认不可自动**（弥散门正确拒绝，外接框覆盖 74.5%） | — |
+
+> 05A/04B 已由「区域先验 SAM」通道解决，**Frangi 骨架流需求关闭**（YAGNI）。
+> 四条品类可选通道（区域先验 SAM / 密度精修 / 密度带 / 弥散门豁免）已覆盖绝大多数漏检，
+> 详见 `docs/未决提取难题结论_20260915.md`。
 
 **被拒/未命中层的内容保留在底板，合成完整性零损失，仅缺独立可编辑图层**，
 且全部写入 `manifest.totals.semantic_coverage`（produced 带 source / rejected 带原因 / missing）。
@@ -83,16 +88,23 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    （直方图推荐参数），配金标准回归防漂移
 5. 前端 vite/后端 8099 为手动启停（用户会自行 kill，勿自动重启）
 6. **自适应语义机制**（`docs/adaptive-semantics/`）：**Stage 1–5.3 代码均已落地**，且自 2026-09-15 起
-   **真正启用**（`japanese_screen_gold.json` 顶层 `mode=hybrid` + `auto_evolve=true`；此前因 preset 缺
-   顶层 `mode` 恒 `locked`，Stage 1/2/4 引擎侧从不执行）。启用后 hybrid 会**限量补充**高亲和度 DB 类目
-   （护栏：affinity≥0.6 且 ≤10 条），须重跑金标准与 RK-16 复核。
-7. **品类扩展**：封闭 5 类仅 1 类（金地屏风）端到端验证；壁布/烫印/水墨/油画 4 类改 preset 即可接入但**未验证**。
-8. **提交状态**：2026-09-15 批次改动见 §9；提交前必跑两组全量测试
-   （当前 169 passed / 2 skipped + WebUI 33 OK）。`webui/data/adaptive_semantics.db.bak-20260915`
-   为迁移修复前备份，确认无误后可删。
+   **真正启用**（`japanese_screen_gold.json` 顶层 `mode=hybrid` + `auto_evolve=true`）。
+   ⚠️ **ADR-021~025 勿回退**：① episode 用 **JSONL 不建表** ② 人审用**轮询** 3s
+   ③ 端点统一 `/api/adaptive/` ④ 迁移 `migration_003_build_tree.py` ⑤ 人审 delete = **软删**
+   （`categories.deleted_at`，db_manager 主查询过滤，勿删该过滤点）。
+   DB `webui/data/adaptive_semantics.db`：categories 27 / category_prompts 47 / category_priors **19**；
+   **`episodes` 表不存在**（按设计）。新增自适应模块必须①接生产调用点②加 wiring 断言
+   （`tests/test_adaptive_wiring.py`）。
+7. **品类扩展**：封闭 5 类中 **金地屏风 / 水墨 / 烫金 / 油画 已端到端验证**；
+   **壁布 plate 线未通过**（三层根因：素材为实物样品照不可平铺 + DINO 对该 preset 类目零检测 +
+   adaptive 覆盖与 `rule_class_allowlist` 冲突），**处置待用户决策**
+   （A 转 DESIGN / B 换可平铺素材 / C 新增样品照 preset；**任何方案都不得放宽 ④/⑤ 阈值**）。
+   ⚠️ §9.2 C2 曾记「壁布 ✅」，已被 2026-09-16 复验推翻，以本条为准。
+8. **提交状态**：2026-09-16 批次见 §10；提交前必跑两组全量测试
+   （当前引擎 **233 passed / 2 skipped** + WebUI **34 OK**）。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
-## 9. 2026-09-15 P0–P2 修复批次（**最新状态，优先阅读**）
+## 9. 2026-09-15 P0–P2 修复批次（历史批次，最新请读 §10）
 
 对全仓库逐文件审计后落地的修复，分 A/B/C 三组：
 
@@ -154,7 +166,7 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 | **B4** | `create_version` **接线到人审反馈**（每次改动落版本节点并激活） | 新测试 `tests/test_feedback_version.py`（3 例） |
 | **B5** | 引擎新增 `ULS_AUDIT_AFTER_RUN=1`：出图后自动审计 → 回填 episode → 重建 CBR 索引；路径支持 `ADAPTIVE_EPISODE_PATH`/`ADAPTIVE_PENDING_PATH`/`ADAPTIVE_INDEX_PATH` 覆写 | 实跑 japanese：`[PostRun] 8 维审计门 exit=0` + `CBR 索引已按真实审计重建：9 条` |
 | **C1** | 05A/04B/04A/03 均由既有通道解决；仅 04D 确认不可自动（无新算法） | `docs/未决提取难题结论_20260915.md` |
-| **C2** | 品类端到端：金地 ✅、壁布 ✅（damask exit=0）、水墨 ✅（ink 172.8s/9 层）、**油画 ✅**（oil 218.6s/8 层） | **4/5 品类实跑通过**；烫金=金地 preset 变体（已覆盖） |
+| **C2** | 品类端到端：金地 ✅、壁布 ✅（damask exit=0）、水墨 ✅（ink 172.8s/9 层）、**油画 ✅**（oil 218.6s/8 层） | **4/5 品类实跑通过**；烫金=金地 preset 变体（已覆盖）。⚠️ **「壁布 ✅」已被 2026-09-16 复验推翻**（plate 线零掩模退化为 4 层），见 §6.7 / §10.2 |
 | **C3** | 材质分类器：四族统一**中心区**口径；**用真值样本标定** | 油画：`inputs/油画.jpeg`（中心 L52.2 a7 b27 sat28.1 edge0.241）→ 油画布 0.70 ✅；并修正绢本判据（**glcm 稠密项须以 edge 稠密为前提**，否则明代水墨误判绢本）。**7 张样本 7/7 判定合理**（金地/壁布/织物/宋·明·元水墨/油画/金地变体） |
 | **C4** | 文档—代码矛盾勘误（M1–M19），**不改历史文档**、以追加新文档形式 | `docs/文档与代码对齐勘误_20260915.md` |
 
@@ -167,9 +179,10 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
 # 服务
 python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
-# 测试
-python -m unittest discover -s tests -p 'test_*.py'          # 引擎 169 passed / 2 skipped（py -m pytest tests/ -q 亦可）
-python -m unittest discover -s webui/backend/tests -p 'test_*.py'  # WebUI 33 OK
+# 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
+#        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
+py -m pytest tests/ -q                                        # 引擎 233 passed / 2 skipped
+py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 34 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
 python tools/calibrate_density_bands.py inputs/source_4000.jpg
@@ -180,3 +193,34 @@ python tools/calibrate_density_bands.py inputs/source_4000.jpg
 - 输出产物：`webui/data/outputs/{task_id}/`（PSB + manifest + masks）
 - 不要提交：PSB/大文件（`webui/data/` 已 gitignore）、`scratch/` 中间产物
 - 提交前必跑：两组全量测试 + 前端 `tsc --noEmit`
+
+## 10. 2026-09-16 批次（**最新状态，优先阅读**）
+
+### 10.1 四项工程缺口修复（提交 `3691660`）
+⑤ 合成等价性改**同 ICC 分色**参考（此前 PIL `convert('CMYK')` K 恒 0 → RMSE 虚高：
+金地 36.49 实为 0.96、商用 32.51 实为 2.43）；指纹 PCA 落地
+（`engine/adaptive/fingerprint_pca.pkl`，**勿放 checkpoints/models，被 gitignore**）；
+CBR 参数不自动注入生产（保护 RK-16）；`category_priors` 真实统计 19 条；
+**绢本工笔必须用 `chinese_ink_landscape_ai`**（此前误用 textile_damask，换后 8 维全过）。
+
+### 10.2 壁布 #49 根因定案（提交 `1c86d9d`）
+三层叠加：**① 素材前提不满足**（`inputs/damask_sample.png` 是壁布**实物样品照**，
+上下平铺接缝差 20.44 ≈ 图内 std 22.10，不可无缝平铺；而 `textile_damask` 含
+`seam_harmonization: cyclic_vertical`）→ **② DINO 对该 preset 的 2 个壁布类目零检测**
+（检出全是屏风系，弥散门拒 4 + allowlist 丢 5 → `成功提取 0 个解耦语义对象掩模`）→
+**③ `run_universal_engine.py:574/637` 用 adaptive DB 类目覆盖 preset 类目**，
+而 DB 27 类目全在「山水画」树下 → 检出屏风系 → 被 `rule_class_allowlist` 全丢。
+已修：清空时打印明确告警（**产物字节不变**，SHA `666de161…`）。
+同时修 ④ 内容承载**假通过**（union 曾含全画布加工层 → lost 恒 0；排除后 damask 0.0→0.1129）。
+
+### 10.3 ★ 通道读取根因修复（提交 `9bd0aa3`）
+- 新建 **`engine/core/psd_layer_io.py`** 作唯一权威读取入口（`layer_alpha`/`layer_rgb`/
+  `full_alpha_mask`，按层实际通道数判定）。`tools/audit_psb.py` 的 `_alpha`/`_layer_rgb`
+  改为**别名**；`tests/audit_system_integrity.py:241`（防欺骗审计）也曾误取 K → 已改走共享入口。
+- **新增静态测试** `test_no_stray_numpy_index3_in_audit_modules`：扫描两审计文件禁止再出现
+  手写 `numpy()[:, :, 3]`/`[:, :, :3]`，机制上防回退。
+- **实测结论**：pytoshop 强制整份 PSD 同模式（混 CMYK+RGBA 抛 `Mismatched color mode`），
+  故单 PSD 内**不会混层**；危险模式只剩"假设全 PSD 4 通道 RGB"。
+
+### 10.4 当前测试基线
+引擎 **233 passed / 2 skipped**；WebUI **34 OK**。提交 **未 push**。
