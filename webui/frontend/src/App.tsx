@@ -66,6 +66,18 @@ const MODE_LABELS: Record<string, string> = {
   both: '双线 both',
 }
 
+/** /api/history 条目（此前为孤儿端点：后端可用、前端零调用 → 刷新后看不到历史任务） */
+interface HistoryItem {
+  task_id: string
+  filename: string
+  preset: string
+  mode: string
+  status: string
+  created_at: string
+  completed_at?: string
+  elapsed_time?: number
+}
+
 export default function App() {
   /* ===== 状态 ===== */
   const [phase, setPhase] = useState<Phase>('idle')
@@ -99,6 +111,26 @@ export default function App() {
   const [autoTuneError, setAutoTuneError] = useState<string | null>(null)
   const [autoTuneCollapsed, setAutoTuneCollapsed] = useState(false)
   const [applyingAutoTune, setApplyingAutoTune] = useState(false)
+
+  // 历史记录（/api/history，此前为孤儿端点：刷新后看不到历史任务）
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const loadHistory = useCallback(() => {
+    setHistoryLoading(true)
+    fetch('/api/history?limit=10')
+      .then((r) => r.json())
+      .then((b) => setHistory(b?.data?.items ?? []))
+      .catch(() => setHistory([]))
+      .finally(() => setHistoryLoading(false))
+  }, [])
+  useEffect(() => {
+    loadHistory()
+  }, [loadHistory])
+  // 任务完成后刷新历史（audit 到手即 phase='done'）
+  useEffect(() => {
+    if (phase === 'done') loadHistory()
+  }, [phase, loadHistory])
 
   /* ===== 后端真实健康检查（每 5 秒） ===== */
   useEffect(() => {
@@ -913,6 +945,66 @@ export default function App() {
             </div>
           </>
         )}
+
+        {/* 历史记录（/api/history，此前为孤儿端点：刷新后看不到历史任务） */}
+        <section className="mt-10 rounded-2xl border border-neutral-800 bg-neutral-900/60">
+          <button
+            onClick={() => setHistoryOpen((v) => !v)}
+            className="flex w-full items-center justify-between px-5 py-3 text-sm text-neutral-300"
+          >
+            <span className="font-semibold">
+              历史记录{history.length > 0 ? `（最近 ${history.length} 次）` : ''}
+            </span>
+            <span className="flex items-center gap-3 text-xs text-neutral-500">
+              <span
+                onClick={(e) => {
+                  e.stopPropagation()
+                  loadHistory()
+                }}
+                className="transition-colors hover:text-neutral-200"
+              >
+                {historyLoading ? '刷新中…' : '刷新'}
+              </span>
+              <span>{historyOpen ? '收起 ▲' : '展开 ▼'}</span>
+            </span>
+          </button>
+          {historyOpen && (
+            <div className="border-t border-neutral-800 px-5 py-3">
+              {history.length === 0 ? (
+                <p className="text-xs text-neutral-500">暂无历史任务</p>
+              ) : (
+                <ul className="divide-y divide-neutral-800/60 text-xs">
+                  {history.map((h) => (
+                    <li
+                      key={h.task_id}
+                      className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
+                    >
+                      <span className="font-mono text-neutral-400">{h.task_id}</span>
+                      <span className="text-neutral-500">{MODE_LABELS[h.mode] ?? h.mode}</span>
+                      <span className="text-neutral-500">{h.preset}</span>
+                      <span
+                        className={
+                          h.status === 'completed' ? 'text-emerald-400' : 'text-red-400'
+                        }
+                      >
+                        {h.status}
+                      </span>
+                      {typeof h.elapsed_time === 'number' && (
+                        <span className="text-neutral-600">{h.elapsed_time.toFixed(0)}s</span>
+                      )}
+                      <span className="ml-auto text-neutral-600">
+                        {h.created_at?.replace('T', ' ').slice(0, 19)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2 text-[11px] text-neutral-600">
+                产物位于 webui/data/outputs/&lt;task_id&gt;/（PSB + manifest + masks + 审计报告）
+              </p>
+            </div>
+          )}
+        </section>
       </main>
 
       {/* Stage 5.3 人审弹窗（有待审类目时显示） */}
