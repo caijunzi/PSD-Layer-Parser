@@ -1,9 +1,14 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  // vitest 单测（jsdom 环境跑组件测试；生产构建不受影响）
+  test: {
+    environment: 'jsdom',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
