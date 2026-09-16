@@ -75,6 +75,10 @@ BBOX_EXEMPT_KEYWORDS: tuple[str, ...] = (
     "frame", "外框", "brocade", "绫边",  # 外框环天然全画布
     "fold", "seam", "折痕",   # 折缝贯穿全画布（V2 实测 47% 靠近阈值，一并豁免）
     "residue", "残层", "unclassified",  # 未分类墨迹残层：内容载体，天然散布全画布
+    # 实物样品照的「画面外背景带」（2026-09-16）：样块外的墙面底衬/投影/水印，
+    # 天然环绕全画布（bbox 覆盖 100%），与外框同类 —— 不豁免会被弥散门误杀，
+    # 导致 sample_panel 的核心交付（背景带隔离层）落不了地。
+    "背景带", "photo_background",
 )
 
 
@@ -317,15 +321,21 @@ class GroundedSAMProvider:
     def segment_objects(
         self,
         image_bgr: np.ndarray,
-        classes: Optional[List[Dict[str, str]]] = None
+        classes: Optional[List[Dict[str, str]]] = None,
+        roi_mask: Optional[np.ndarray] = None
     ) -> Dict[str, np.ndarray]:
         """
         根据语义提示词或预设对输入图像执行智能解耦分层。
-        
+
         Args:
             image_bgr: BGR 格式输入图像
             classes: 语义分类提示词列表
-                
+            roi_mask: 可选「有效内容区」掩码（bool/uint8，True=内容区）。
+                实物样品照场景（preset.sample_panel）传入实体样块 ROI：
+                  ① 规则 provider 以 `m_frame = ~roi_mask` 产出「画面外背景带」；
+                  ② 神经掩模裁剪到 ROI，避免墙面底衬/投影上的检出混入内容层。
+                默认 None → 行为与既往完全一致（内部自动探测 ROI）。
+
         Returns:
             Dict[str, np.ndarray]: 图层名称 -> uint8 二值掩模 (0/255)
         """
@@ -340,7 +350,8 @@ class GroundedSAMProvider:
 
         # 2. 动态特征与骨架流分层 (多尺度 Frangi 骨架流 + 几何边缘算子，100% 动态实时计算，零磁盘旧文件直读)
         rule_segmenter = UniversalSemanticSegmenter(preset=self.preset_name)
-        base_masks = rule_segmenter.segment_objects(image_bgr)
+        # 样品照：把实体样块 ROI 作为画心掩码 —— 规则 provider 的 `~roi` 即「画面外背景带」
+        base_masks = rule_segmenter.segment_objects(image_bgr, painting_roi=roi_mask)
         final_masks = self._map_to_bilingual_names(base_masks)
 
         # 2.5 区域先验 SAM 覆盖（2026-09-12 P1 实证）：preset 给 class 配 region 时，
@@ -393,6 +404,18 @@ class GroundedSAMProvider:
         accepted, rejected = [], []
         if neural_masks:
             for k, m in neural_masks.items():
+                # 样品照：神经掩模裁剪到实体样块 ROI（墙面底衬/投影上的检出不得混入内容层）
+                if roi_mask is not None:
+                    _roi = np.asarray(roi_mask).astype(bool)
+                    m = (np.asarray(m).astype(bool) & _roi).astype(np.uint8) * 255
+                    if np.count_nonzero(m) == 0:
+                        rejected.append(f"{k}（裁剪到样块 ROI 后为空）")
+                        for det in self.dino_detections:
+                            if det.get("layer_name") == k:
+                                det["quality_gate_passed"] = False
+                                det["quality_gate_reason"] = "裁剪到样块 ROI 后为空"
+                                break
+                        continue
                 ok, reason = self._quality_gate(k, m, rule_final.get(k))
                 if ok:
                     final_masks[k] = m

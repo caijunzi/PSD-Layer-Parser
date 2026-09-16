@@ -96,12 +96,11 @@ WebUI (React+Vite :5173)  ──proxy 127.0.0.1 必写死──▶  后端 (Fast
    **`episodes` 表不存在**（按设计）。新增自适应模块必须①接生产调用点②加 wiring 断言
    （`tests/test_adaptive_wiring.py`）。
 7. **品类扩展**：封闭 5 类中 **金地屏风 / 水墨 / 烫金 / 油画 已端到端验证**；
-   **壁布 plate 线未通过**（三层根因：素材为实物样品照不可平铺 + DINO 对该 preset 类目零检测 +
-   adaptive 覆盖与 `rule_class_allowlist` 冲突），**处置待用户决策**
-   （A 转 DESIGN / B 换可平铺素材 / C 新增样品照 preset；**任何方案都不得放宽 ④/⑤ 阈值**）。
-   ⚠️ §9.2 C2 曾记「壁布 ✅」，已被 2026-09-16 复验推翻，以本条为准。
+   **壁布**已由新增 **`textile_damask_photo`** preset 覆盖**实物样品照**（方案 C，8 维审计全过，见 §10.4）；
+   原 `textile_damask` 面向**可平铺数码纹样**，**不用于实物样品照**（混用即 §9.2 C2 的失败）。
+   ⚠️ §9.2 C2 曾记「壁布 ✅」，当时结论有误，以本条与 §10.4 为准。
 8. **提交状态**：2026-09-16 批次见 §10；提交前必跑两组全量测试
-   （当前引擎 **233 passed / 2 skipped** + WebUI **34 OK**）。
+   （当前引擎 **247 passed / 2 skipped** + WebUI **34 OK**）。
 9. GPU 分割优化**已实测否决**（见 §3），勿重复投入；DINO `_C` 编译**用户决定放弃**。
 
 ## 9. 2026-09-15 P0–P2 修复批次（历史批次，最新请读 §10）
@@ -181,7 +180,7 @@ python -m uvicorn main:app --host 127.0.0.1 --port 8099     # webui/backend
 npm run dev                                                  # webui/frontend → :5173
 # 测试（⚠️ 必须用系统 Python 3.12.10：C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe；
 #        WorkBuddy managed 3.13 无 numpy。WebUI discover 不可加 -t，否则 base 模块 import 失败）
-py -m pytest tests/ -q                                        # 引擎 233 passed / 2 skipped
+py -m pytest tests/ -q                                        # 引擎 247 passed / 2 skipped
 py -m unittest discover -s webui/backend/tests -p "test_*.py" # WebUI 34 OK
 # 实验
 python scratch/quick_seg.py [preset]                         # 分割+掩模统计（~100s）
@@ -222,5 +221,14 @@ CBR 参数不自动注入生产（保护 RK-16）；`category_priors` 真实统�
 - **实测结论**：pytoshop 强制整份 PSD 同模式（混 CMYK+RGBA 抛 `Mismatched color mode`），
   故单 PSD 内**不会混层**；危险模式只剩"假设全 PSD 4 通道 RGB"。
 
-### 10.4 当前测试基线
-引擎 **233 passed / 2 skipped**；WebUI **34 OK**。提交 **未 push**。
+### 10.4 ★ 壁布样品照独立 preset（方案 C，2026-09-16）
+新增 **`presets/textile_damask_photo.json`** + **`engine/core/sample_panel.py`**（零硬编码样块检测，
+判据=长直边持续性；真值边界精确命中）。要点：`seam_harmonization` 关闭、`mode=locked`
+（**根除根因③**）、精确 `rule_class_allowlist`、样块外 → **「画面外背景带」层**。
+引擎接线：`GroundedSAMProvider.segment_objects(..., roi_mask=)`（新参数）+ 神经掩模裁到 ROI；
+`BBOX_EXEMPT_KEYWORDS` 加 `背景带`/`photo_background`（否则被弥散门误杀）。
+**实测**：样块 ROI 80.9%、**DINO 在样块区内确实检出团花**（根因②不再阻塞）、图层 7 个、
+**8 维审计全过 exit=0**、④ lost 0.000472、⑤ rmse_lowfreq 13.1（旧：4 层 / 11.29% / 40.31 / exit=2）。
+
+### 10.5 当前测试基线
+引擎 **247 passed / 2 skipped**；WebUI **34 OK**。提交 **未 push**。

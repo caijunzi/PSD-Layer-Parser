@@ -8,7 +8,7 @@
 - **必须用系统 Python 3.12.10**：
   `C:/Users/CK/AppData/Local/Programs/Python/Python312/python.exe`
   （WorkBuddy managed 3.13.12 **无 numpy**）。已装 numpy/sklearn/cv2/PIL/psd_tools/pytoshop/skimage。
-- 引擎全量：`py -m pytest tests/ -q`（基线 **233 passed / 2 skipped**）
+- 引擎全量：`py -m pytest tests/ -q`（基线 **247 passed / 2 skipped**）
 - WebUI：`py -m unittest discover -s webui/backend/tests -p "test_*.py"`
   （**不可加 `-t`**，否则 base 模块 import 失败；**34 OK**）
 - Git Bash 缺 `tail`/`head`/`ls`；`rm` 被 safe-delete 钩子拦截（exit 127）
@@ -113,6 +113,21 @@
   扫描 audit_psb/audit_system_integrity 禁止再出现手写 `numpy()[:, :, 3]`/`[:, :, :3]`，防回退。
 - **实测关键结论**：pytoshop 强制整份 PSD 同模式（混 CMYK+RGBA 抛 "Mismatched color mode"），
   故单 PSD 内**不会混层**；真实产物要么全 RGB(4ch) 要么全 CMYK(5ch)，危险模式只剩"假设全 4 通道"。
+
+## 7. 壁布样品照 preset（方案 C，2026-09-16，勿回退）
+- **`presets/textile_damask_photo.json`**：面向**实物样品照**（原 `textile_damask` 只面向可平铺数码纹样）。
+  关键：`seam_harmonization.enabled=false`、**`mode="locked"`**（禁用 adaptive 覆盖→根除根因③）、
+  `rule_class_allowlist` 用**精确名单**（背景带+团花+卷草，勿清空）。
+- **`engine/core/sample_panel.py`**：零硬编码样块检测，判据=**长直边持续性**
+  （`(dx>thr).mean(axis=…)`）；四边=高持续性行列 min/max；守卫=边长≥20% 且四边内缩≥1%，
+  否则回退 None。实测 damask 真值 `(49,968,75,1457)` 精确命中。
+  ⚠️ 现有 `_detect_painting_roi`（灰度对比）对同色系样品照**失效**（灰度差 3.3<10），勿复用。
+- **接线**：`GroundedSAMProvider.segment_objects(..., roi_mask=None)`（新参数）→ 下传规则分割器
+  `painting_roi=roi_mask` + 神经掩模裁到 ROI；`run_universal_engine.py` 算 ROI 传入。
+- **★ 弥散门豁免**：`BBOX_EXEMPT_KEYWORDS` 必须含 `"背景带"`/`"photo_background"`
+  —— 背景带天然跨全幅 bbox=100%，**不豁免会被弥散门静默拒绝**（第一轮 e2e 实测）。
+- **实测**：样块 ROI 80.9%、DINO 在样块区内**确实检出团花**、图层 7、**8 维审计全过 exit=0**、
+  ④ lost 0.000472、⑤ rmse_lowfreq 13.1、**cold/repeat 字节可复现**（SHA `d62dbeef…`）。
 - **基线**：引擎 **227 passed / 2 skipped**；WebUI **34 OK**。
   新增测试类 `TestAlphaChannelLayout` / `TestLayerRgbConversion` /
   `TestProcessLayersExcludedFromCarrier`（`tests/test_audit_psb.py`）。

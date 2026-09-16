@@ -725,7 +725,25 @@ def run_pipeline(input_path, output_path, preset_name="japanese_screen_gold", ta
     grounded_sam._preset_cfg = preset
     grounded_sam.preset = preset
     grounded_sam._load_preset_config = lambda: preset
-    masks_dict = grounded_sam.segment_objects(src_lr, classes=preset.get("ai_semantic_classes"))
+    # 实物样品照（preset.sample_panel）：自动检测实体样块边界，样块外（墙面底衬/投影/水印）
+    # 归入「画面外背景带」层。零硬编码（长直边持续性）；无线索时回退整幅（行为与既往一致）。
+    panel_roi = None
+    _sp_cfg = preset.get("sample_panel") or {}
+    if _sp_cfg.get("enabled"):
+        try:
+            from engine.core.sample_panel import resolve_sample_panel_roi
+            panel_roi = resolve_sample_panel_roi(src_lr, _sp_cfg)
+            if panel_roi is not None:
+                _cov = 100.0 * float(panel_roi.mean())
+                print(f"  -> [sample_panel] 检出实体样块 ROI {_cov:.1f}%"
+                      f"（画面外背景带 {100.0 - _cov:.1f}%）")
+            else:
+                print("  -> [sample_panel] 未检出实体样块（无长直边线索），回退整幅")
+        except Exception as _sp_err:
+            print(f"  -> [sample_panel] 检测失败，回退整幅: {_sp_err}")
+            panel_roi = None
+    masks_dict = grounded_sam.segment_objects(
+        src_lr, classes=preset.get("ai_semantic_classes"), roi_mask=panel_roi)
     # 语义覆盖披露（G5）：配置了什么/产出什么/缺什么/为什么 —— 供 manifest.totals 披露
     semantic_coverage = getattr(grounded_sam, "last_coverage", None)
     # 品类语义白名单（G2）：规则引擎的类集合是屏风系内置的，非屏风品类若不过滤，

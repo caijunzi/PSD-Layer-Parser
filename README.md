@@ -28,7 +28,7 @@
 > ③ R2 照度平场（`lighting.py`）与 R3 接缝对齐（`seam_harmonizer`）、金属分色（`metallic_foil`）**已接线**；
 > ④ `manifest.save(mask_dir)` 不再空壳、CBR 检索与归档格式统一、`migration_003` 自环修复、自适应模块缺陷
 >    （字段错配/权重 clamp/回归维度/DB 版本 API）修复；⑤ `PYTHON_BIN` 改为可配置（`ULS_PYTHON_BIN`）。
-> 当前回归基线：引擎 **233 passed / 2 skipped**，WebUI **34 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布 plate 线的失败根因已定案为**三层叠加**（素材前提不满足 + DINO 类目零检测 + adaptive 覆盖与 allowlist 冲突），见下方"壁布 plate 残余项"。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
+> 当前回归基线：引擎 **247 passed / 2 skipped**，WebUI **34 passed**（2026-09-16）。真实绢本工笔两张样本分类均通过；其分层质量问题已定位并修复（见下方"绢本工笔 preset 修正"）。壁布**实物样品照**新增 `textile_damask_photo` preset，8 维审计全过（旧 `textile_damask` 混用导致的三层根因已逐条处置，见下方"壁布 plate 残余项"）。通道读取缺陷已根除（统一收敛到 `engine/core/psd_layer_io.py` 单一入口，见下方"审计缺陷批次"）。
 > 本轮新增自适应字段桥接、审计回填、CBR 冷启动闭环和真实样本回归；最新九样本隔离 cold/repeat 证据见 `outputs/adaptive-e2e-20260915-rerun/results.json`，完整分析见 `docs/测试报告_20260915_全样本自适应链路收口.md`。历史首轮证据仍保留在 `outputs/adaptive-e2e-20260915-final/results.json`，油画 preset 修复后的独立复跑见 `outputs/adaptive-e2e-20260915-oil-retest/result.json`。
 
 ---
@@ -40,7 +40,8 @@
 | 品类 | Preset 文件 | 状态 |
 |---|---|---|
 | 屏风（日本金地） | `japanese_screen_gold.json` | ✅ 端到端验证通过 |
-| 壁布（大马士革） | `textile_damask.json` | ⚠️ Preset 完整；端到端**未通过**（2026-09-16 定案，见下方残余项） |
+| 壁布（大马士革数码纹样） | `textile_damask.json` | ✅ Preset 完整（面向**可平铺**循环纹样） |
+| 壁布（实物样品照） | `textile_damask_photo.json` | ✅ **端到端验证通过**（2026-09-16 新增，8 维审计全过） |
 | 水墨山水 | `chinese_ink_landscape_ai.json` | ✅ Preset 完整 |
 | 烫金（含金地屏风变体） | `japanese_screen_gold.json` | ✅ Preset 完整 |
 | 油画（西洋古典） | `western_oil_painting.json` | ✅ Preset 完整（2026-09-11 新增）|
@@ -86,7 +87,7 @@
 2. 人审通信用**轮询**（`GET /api/adaptive/pending-feedbacks`），不引入 WebSocket/SSE
 3. `inherit_priors()` 在 `category_priors` 为空时**优雅跳过**；有真实先验时才复制，不手写未经验证的 seed
 
-> 引擎全量测试基线已更新为 **233 passed / 2 skipped**；WebUI **34 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
+> 引擎全量测试基线已更新为 **247 passed / 2 skipped**；WebUI **34 passed**。最新隔离端到端复测为 9 张样本 × cold/repeat 共 18 次，18 个 PSB 均生成、9/9 字节可复现，生产 DB 未变化；完整报告见 `docs/测试报告_20260915_全样本自适应链路收口.md`。
 
 > **2026-09-16 修复批次（四项工程缺口）**：
 > ① **⑤ 合成等价性 CMYK 比对口径**：PLATE 产物是 ICC FOGRA39 真分色（有黑版），
@@ -122,8 +123,15 @@
 >    树下 → 检出屏风系 → 被 `rule_class_allowlist=["02_巴洛克团花…"]` **全部丢弃** → **零掩码**
 >    → 产物退化为「底板+残层+2 工艺层」。
 >    **已修**：清空全部产出时打印明确告警（含根因与处置），**产物字节不变**。
-> 处置待定（A 转 DESIGN 线 / B 换可平铺素材 / C 新增「壁布样品照」preset）。
-> **任何方案下都不得放宽 ④/⑤ 阈值来凑通过。**
+>
+> **处置已定并落地（2026-09-16，方案 C）**：新增 **`textile_damask_photo`** 独立 preset +
+> `engine/core/sample_panel.py` 零硬编码样块检测（长直边持续性；真值边界 rows 48~52/968~970、
+> cols 75~78/1454~1458 精确命中）。要点：`seam_harmonization` 关闭（样品照不可平铺）、
+> `mode=locked`（**禁用 adaptive 覆盖 → 根除根因③**）、`rule_class_allowlist` 用**精确名单**
+> （背景带+团花+卷草）、样块外经 ROI 归入 **「画面外背景带」层**（弥散门已豁免该类）。
+> **实测**：样块 ROI 80.9%、DINO 在样块区内**确实检出团花**（根因②在此 preset 下不再阻塞）、
+> 独立图层 **7 个**（旧 4 个退化层）、**8 维审计全过 exit=0**、④ lost 0.000472、⑤ rmse_lowfreq 13.1。
+> **任何方案下都不得放宽 ④/⑤ 阈值来凑通过**（本次为真实通过，非放宽）。
 
 ---
 
@@ -289,7 +297,7 @@ python pipeline/06_verify_psb.py --file <psb>         # 印前结构校验
 全量披露）+ `<name>.masks/`（逐层重建区掩码 PNG）。**回灌制版线时必须读取掩码剔除生成内容**
 （§3.1 硬边界 1 的落地要求）。
 
-已知限制：封闭 5 类 preset 均已完成定义（屏风/水墨/烫金/油画已验证；**壁布 plate 线未通过**，
-三层根因见"一之二"节残余项，处置待定）；WebUI（G4）backend（6 个 API 模块 + WS 进度）与
-frontend（React+Vite）均已实现，**待做的是端到端联调冒烟**（迄今只跑过 34 个单元测试）；
-ICC 黑版生成曲线按品类调优待做。
+已知限制：封闭 5 类 preset 均已完成定义（屏风/水墨/烫金/油画已验证；**壁布新增
+`textile_damask_photo` 处理实物样品照，8 维审计全过**，原 `textile_damask` 仍面向可平铺数码纹样）；
+WebUI（G4）backend（6 个 API 模块 + WS 进度）与 frontend（React+Vite）均已实现，
+**待做的是端到端联调冒烟**（迄今只跑过 34 个单元测试）；ICC 黑版生成曲线按品类调优待做。
