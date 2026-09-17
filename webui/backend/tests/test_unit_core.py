@@ -23,17 +23,18 @@ class TestFileHandlerRules(BaseWebUITest):
 
     def test_recommend_preset_ratio(self):
         # 宽:高 ≈ 2:1 → 屏风（横向长卷）
-        name, conf = _recommend_preset({"width": 2000, "height": 1000})
+        r = _recommend_preset({"width": 2000, "height": 1000}); name, conf = r["preset"], r["confidence"]
         self.assertEqual(name, "japanese_screen_gold")
-        self.assertEqual(conf, 0.78)
+        # 2026-09-17：宽高比兜底属「未匹配」→ confidence 封顶 0.55（前端未识别分级触发依据）
+        self.assertEqual(conf, 0.55)
         # ≈ 1:1 → 壁布纹样
-        name, conf = _recommend_preset({"width": 1000, "height": 1000})
+        r = _recommend_preset({"width": 1000, "height": 1000}); name, conf = r["preset"], r["confidence"]
         self.assertEqual(name, "textile_damask")
         # 极端比例 → 默认屏风低置信
-        name, conf = _recommend_preset({"width": 3000, "height": 1000})
+        r = _recommend_preset({"width": 3000, "height": 1000}); name, conf = r["preset"], r["confidence"]
         self.assertEqual((name, conf), ("japanese_screen_gold", 0.55))
         # 读不到尺寸 → 0.5 兜底
-        self.assertEqual(_recommend_preset(None), ("japanese_screen_gold", 0.5))
+        r = _recommend_preset(None); self.assertEqual(r["preset"], "japanese_screen_gold"); self.assertFalse(r["matched"])
 
     def test_list_presets_real_dir(self):
         presets = list_presets()

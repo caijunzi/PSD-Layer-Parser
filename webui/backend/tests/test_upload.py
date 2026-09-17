@@ -82,7 +82,7 @@ class TestRecommendPreset(BaseWebUITest):
 
     def _rec(self, rel, w, h):
         from core.file_handler import _recommend_preset
-        return _recommend_preset({"width": w, "height": h}, rel)
+        return _recommend_preset({"width": w, "height": h}, rel)  # 返回结构化 dict
 
     def test_real_wallcovering_recommends_photo_preset(self):
         """真实工艺壁布（织物特写，无样块）→ 材质判别「织物壁布」→ 照片 preset。
@@ -94,7 +94,7 @@ class TestRecommendPreset(BaseWebUITest):
             p = self._inputs(f"工艺壁布-{i}.jpeg")
             if p is None:
                 continue
-            name, conf = self._rec(str(p), 2848, 1600)
+            r = self._rec(str(p), 2848, 1600); name, conf = r["preset"], r["confidence"]
             self.assertEqual(name, "textile_damask_photo",
                              f"工艺壁布-{i} 应荐照片 preset，实际 {name}({conf})")
             self.assertGreaterEqual(float(conf), 0.6)
@@ -111,7 +111,7 @@ class TestRecommendPreset(BaseWebUITest):
         p = self._inputs("source_4000.jpg")
         if p is None:
             self.skipTest("缺少 inputs/source_4000.jpg")
-        name, conf = self._rec(str(p), 4000, 1952)
+        r = self._rec(str(p), 4000, 1952); name, conf = r["preset"], r["confidence"]
         self.assertEqual(name, "japanese_screen_gold",
                          f"金地屏风应荐 japanese_screen_gold，实际 {name}({conf})")
         self.assertNotEqual(name, "textile_damask_photo")
@@ -120,7 +120,7 @@ class TestRecommendPreset(BaseWebUITest):
         p = self._inputs("油画.jpeg")
         if p is None:
             self.skipTest("缺少 inputs/油画.jpeg")
-        name, _ = self._rec(str(p), 2880, 1440)
+        name = self._rec(str(p), 2880, 1440)["preset"]
         self.assertEqual(name, "western_oil_painting", f"实际 {name}")
 
     def test_ink_and_silk_recommend_ink_preset(self):
@@ -129,7 +129,7 @@ class TestRecommendPreset(BaseWebUITest):
             p = self._inputs(fn)
             if p is None:
                 continue
-            name, _ = self._rec(str(p), 2880, 1440)
+            name = self._rec(str(p), 2880, 1440)["preset"]
             self.assertEqual(name, "chinese_ink_landscape_ai", f"{fn} 实际 {name}")
 
     def test_non_fabric_noise_falls_back_to_ratio(self):
@@ -138,14 +138,14 @@ class TestRecommendPreset(BaseWebUITest):
         rng = np.random.default_rng(1)
         img = rng.integers(0, 255, (400, 600, 3)).astype(np.uint8)
         p = self._write(img, "noise.png")
-        name, _ = self._rec(p, 600, 400)
+        name = self._rec(p, 600, 400)["preset"]
         self.assertNotEqual(name, "textile_damask_photo")
 
     def test_ratio_fallbacks_unchanged(self):
         from core.file_handler import _recommend_preset
-        self.assertEqual(_recommend_preset({"width": 4000, "height": 1952})[0], "japanese_screen_gold")
-        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000})[0], "textile_damask")
-        self.assertEqual(_recommend_preset(None)[0], "japanese_screen_gold")
+        self.assertEqual(_recommend_preset({"width": 4000, "height": 1952})["preset"], "japanese_screen_gold")
+        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000})["preset"], "textile_damask")
+        self.assertEqual(_recommend_preset(None)["preset"], "japanese_screen_gold")
         # 不存在的路径 → 安全降级
-        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000}, "/no/such.png")[0],
+        self.assertEqual(_recommend_preset({"width": 1000, "height": 1000}, "/no/such.png")["preset"],
                          "textile_damask")
