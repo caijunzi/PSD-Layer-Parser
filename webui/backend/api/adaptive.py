@@ -507,3 +507,33 @@ async def learning_status_endpoint(limit: int = 100, status: Optional[str] = Non
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询学习状态失败: {str(e)}")
 
+
+
+@router.get("/adaptive/unknown-samples")
+async def list_unknown_samples(limit: int = 50):
+    """未匹配样本待标注队列（短期 2）：材质判别没认出来的上传图。
+
+    数据来源：core.file_handler._append_unknown_queue 追加的 JSONL。
+    用途：人工筛选/命名/训练的输入（UI 筛选与批量命名为后续工作）。
+
+    Returns:
+        {"total": int, "items": [ {...}, ... ]}（按时间倒序，最新在前）
+    """
+    import json as _json
+    from core.file_handler import UNKNOWN_QUEUE
+
+    if not UNKNOWN_QUEUE.exists():
+        return {"total": 0, "items": []}
+    items = []
+    try:
+        with open(UNKNOWN_QUEUE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        items.append(_json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"读取未匹配队列失败: {e}")
+    return {"total": len(items), "items": list(reversed(items[-limit:]))}

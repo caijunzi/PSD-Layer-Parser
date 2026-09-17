@@ -24,6 +24,11 @@ type UploadInfo = {
   thumbnail_url: string | null
   recommended_preset: string
   confidence: number
+  /** 2026-09-17：材质判别是否真正命中（false = 按宽高比/兜底推测，需用户确认品类） */
+  matched?: boolean
+  recommend_reason?: string
+  material_family?: string | null
+  family_conf?: number | null
 }
 
 type OutputFile = {
@@ -589,9 +594,49 @@ export default function App() {
                 {uploadInfo.file_id} · {fmtSize(uploadInfo.size)}
                 {uploadInfo.dimensions ? ` · ${uploadInfo.dimensions.width}×${uploadInfo.dimensions.height}` : ''}
               </p>
-              <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-                AI 推荐：<b>{uploadInfo.recommended_preset}</b>（置信度 {uploadInfo.confidence.toFixed(2)}，已自动选中）
-              </div>
+              {/* 2026-09-17：推荐置信度分级展示（未匹配 = 材质判别没认出来，需用户确认品类） */}
+              {(() => {
+                const unmatched = uploadInfo.matched === false
+                const conf = uploadInfo.confidence
+                const tier: 'high' | 'mid' | 'unknown' =
+                  unmatched || conf < 0.6 ? 'unknown' : conf >= 0.8 ? 'high' : 'mid'
+                if (tier === 'unknown') {
+                  return (
+                    <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                      <b>未识别品类</b>——材质判别置信度不足，当前 preset 是按画面比例推测的，
+                      已自动选中（置信度 {conf.toFixed(2)}）。
+                      <span className="mt-1 block text-amber-200/80">
+                        内容不会丢失（未识别部分会完整进入「未分类墨迹残层」），
+                        但语义分层可能不准确——建议从下方「品类 Preset」手动确认。
+                      </span>
+                      <button
+                        onClick={() =>
+                          document
+                            .getElementById('preset-section')
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                        }
+                        className="mt-2 rounded-lg border border-amber-400/50 px-3 py-1 text-[11px] text-amber-200 transition-colors hover:bg-amber-500/20"
+                      >
+                        去选择品类 ↓
+                      </button>
+                    </div>
+                  )
+                }
+                const cls =
+                  tier === 'high'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                    : 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                const label = tier === 'high' ? 'AI 推荐 · 可信' : 'AI 推荐 · 仅供参考'
+                return (
+                  <div className={`mt-3 rounded-lg border px-3 py-2 text-xs ${cls}`}>
+                    {label}：<b>{uploadInfo.recommended_preset}</b>
+                    （置信度 {conf.toFixed(2)}，已自动选中）
+                    {tier === 'mid' && (
+                      <span className="ml-1 text-amber-200/80">建议核对此品类是否符合预期</span>
+                    )}
+                  </div>
+                )
+              })()}
               {phase !== 'processing' && phase !== 'done' && (
                 <button
                   onClick={resetAll}
@@ -621,7 +666,7 @@ export default function App() {
 
             <div className="grid gap-4 md:grid-cols-2">
             {/* Preset 选择 */}
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-800/40 p-5">
+            <div id="preset-section" className="rounded-2xl border border-neutral-800 bg-neutral-800/40 p-5">
               <h4 className="mb-3 text-sm font-semibold text-neutral-300">
                 品类 Preset（{presets.length} 类可用）
               </h4>
