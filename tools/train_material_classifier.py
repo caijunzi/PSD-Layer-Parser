@@ -97,7 +97,8 @@ def build_dataset(corpus: dict[str, list[Path]]):
             if img is None:
                 raise RuntimeError(f"语料读取失败: {p}")  # 显式失败，绝不静默跳过
             fp = extract_fingerprint(img)
-            vec = fingerprint_vec(fp)
+            # 直接使用指纹内的完整 84 维原始特征向量（与 PCA/CBR 同源，维度最全）
+            vec = np.asarray(fp["raw_features"], dtype=np.float64)
             X.append(vec)
             y.append(fam)
             files.append(p.name)
