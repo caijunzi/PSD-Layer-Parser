@@ -4,7 +4,7 @@
 基于指纹特征的规则判别（Stage 1）→ 后续可升级为 LightGBM（Stage 3）
 6 类：金地屏风 / 宣纸水墨 / 绢本工笔 / 油画布 / 织物壁布 / 其他
 
-2026-09-16：新增「织物壁布」族 —— 此前无此族，`inputs/工艺壁布-*.jpeg`
+2026-09-16：新增「织物壁布」族 —— 此前无此族，`inputs/壁布实物照_*.jpeg`
 （深灰/浅灰绗缝织物）被强行塞进最接近的绘画族，实测全被误判为「宣纸水墨」，
 进而推荐到错误的 preset。织物（壁布/面料）的判据是**近中性**（见
 `_score_fabric_wallcovering`），与四种绘画基材正交。
@@ -77,7 +77,7 @@ def _score_gold_screen(bg_L: float, bg_a: float, bg_b: float, saturation: float,
     """
     金地屏风：金黄地子 —— 高 b*（黄）+ 高亮度 + 近中性 a* + 中高饱和。
 
-    标定（2026-09-15，source_4000.jpg 画心实测 L80 a5 b38 sat35）：
+    标定（2026-09-15，金地屏风旗舰图（原 source_4000.jpg）画心实测 L80 a5 b38 sat35）：
     旧规则对外框灰底（L37 b0）恒失配 → 金地被误判为油画布；改用中心区后
     以 b*（黄度）为主判据。
     """
@@ -161,7 +161,7 @@ def _score_silk_painting(cL: float, cb: float, saturation: float,
 
     中心区口径重标定（2026-09-15）。区分点：绢本/织物纹理**稠密**
     （edge ≥ 0.16，且此时 glcm ≥ 0.28 再加权），据此与写意水墨拉开差距。
-    已用 `inputs/绢本工笔画-1.jpeg` 与 `inputs/绢本工笔画-2.jpeg` 真值校准：
+    已用 `inputs/绢本工笔_牡丹双雀_仿古绢底.jpeg` 与 `inputs/绢本工笔_锦鸡鸳鸯松石_仿古绢底.jpeg` 真值校准：
     两者中心特征分别为 edge/glcm=`0.0915/0.4295`、`0.1234/0.3466`。
     真绢本不一定有织物样本那么高的边缘密度，因此增加“暖色绢地 + 细腻纹理”分支；
     仍保留 edge≥0.16 的密集织物分支，并用 edge 前置约束防止水墨误判。
@@ -211,7 +211,7 @@ def _score_oil_canvas(cL: float, saturation: float, edge_density: float) -> floa
     油画布：多样亮度 + 高饱和（> 25）+ 高边缘密度（厚重笔触）。
 
     C3（2026-09-15）：统一到**中心区**口径，并已用真值样本标定：
-    `inputs/油画.jpeg` 中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159
+    `inputs/西洋壁画_乔托风圣母圣人群像_湿壁画金底.jpeg` 中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159
     → 油画布 0.70 胜出（其余族 ≤0.50），与人工判断一致。
     """
     score = 0.0
@@ -240,7 +240,7 @@ def _score_fabric_wallcovering(cL: float, ca: float, cb: float,
                                lbp_entropy: float = None) -> float:
     """织物壁布（工艺壁布 / 绗缝面料 / 面料实物照）：**近中性 + 有结构纹理**。
 
-    标定（2026-09-16，真值 `inputs/工艺壁布-1/2/3.jpeg` 中心区实测）：
+    标定（2026-09-16，真值 `inputs/壁布实物照_*.jpeg` 中心区实测）：
       -1 L45.9 a2.0 b7.0  sat7.1  edge0.133 LBP熵2.47
       -2 L69.0 a1.0 b9.0  sat10.7 edge0.385 LBP熵2.18
       -3 L84.3 a0.0 b5.0  sat7.0  edge0.098 LBP熵2.46

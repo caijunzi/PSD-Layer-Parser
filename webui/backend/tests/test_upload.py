@@ -91,41 +91,41 @@ class TestRecommendPreset(BaseWebUITest):
         """
         checked = 0
         for i in (1, 2, 3):
-            p = self._inputs(f"工艺壁布-{i}.jpeg")
+            p = self._inputs(["壁布实物照_深灰菱块卷草刺绣_斜摄带卷边.jpeg", "壁布实物照_灰米提花大马士革团花_正视近整幅.jpeg", "壁布实物照_米白缎面玫瑰刺绣_微距斜摄.jpeg"][i - 1])
             if p is None:
                 continue
             r = self._rec(str(p), 2848, 1600); name, conf = r["preset"], r["confidence"]
             self.assertEqual(name, "textile_damask_photo",
-                             f"工艺壁布-{i} 应荐照片 preset，实际 {name}({conf})")
+                             f"壁布实物照 {i} 应荐照片 preset，实际 {name}({conf})")
             self.assertGreaterEqual(float(conf), 0.6)
             checked += 1
         if checked == 0:
-            self.skipTest("缺少 inputs/工艺壁布-*.jpeg")
+            self.skipTest("缺少 inputs/壁布实物照_*.jpeg")
 
     def test_gold_screen_not_misrouted_to_photo_preset(self):
         """★ 回归：金地屏风**不得**被绫边外框带偏成壁布样品照 preset。
 
-        实测 `inputs/source_4000.jpg`（4000×1952，含绫边外框）在旧顺序下会被
+        实测 `inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg`（4000×1952，含绫边外框）在旧顺序下会被
         样块检测命中而误荐 textile_damask_photo。
         """
-        p = self._inputs("source_4000.jpg")
+        p = self._inputs("金地屏风_江户芦雁寒林六曲_绫边装裱.jpg")
         if p is None:
-            self.skipTest("缺少 inputs/source_4000.jpg")
+            self.skipTest("缺少 inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg")
         r = self._rec(str(p), 4000, 1952); name, conf = r["preset"], r["confidence"]
         self.assertEqual(name, "japanese_screen_gold",
                          f"金地屏风应荐 japanese_screen_gold，实际 {name}({conf})")
         self.assertNotEqual(name, "textile_damask_photo")
 
     def test_oil_painting_recommends_oil_preset(self):
-        p = self._inputs("油画.jpeg")
+        p = self._inputs("西洋壁画_乔托风圣母圣人群像_湿壁画金底.jpeg")
         if p is None:
-            self.skipTest("缺少 inputs/油画.jpeg")
+            self.skipTest("缺少 inputs/西洋壁画_乔托风圣母圣人群像_湿壁画金底.jpeg")
         name = self._rec(str(p), 2880, 1440)["preset"]
         self.assertEqual(name, "western_oil_painting", f"实际 {name}")
 
     def test_ink_and_silk_recommend_ink_preset(self):
         """水墨与绢本均归 `chinese_ink_landscape_ai`（README：绢本必须用该 preset）。"""
-        for fn in ("宋代写意山水画创作.jpeg", "绢本工笔画-1.jpeg"):
+        for fn in ("青绿山水_松亭瀑布渔舟_纸本设色.jpeg", "绢本工笔_牡丹双雀_仿古绢底.jpeg"):
             p = self._inputs(fn)
             if p is None:
                 continue

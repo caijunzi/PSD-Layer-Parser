@@ -65,9 +65,9 @@ class TestRecommendMatched(unittest.TestCase):
 
     def test_known_fabric_sample_is_matched(self):
         """已知样本（工艺壁布）：材质应命中 → matched=True 且置信度不被封顶。"""
-        sample = ROOT / "inputs" / "工艺壁布-1.jpeg"
+        sample = ROOT / "inputs" / "壁布实物照_深灰菱块卷草刺绣_斜摄带卷边.jpeg"
         if not sample.is_file():
-            self.skipTest("缺少已知样本 inputs/工艺壁布-1.jpeg")
+            self.skipTest("缺少已知样本 inputs/壁布实物照_深灰菱块卷草刺绣_斜摄带卷边.jpeg")
         r = _recommend_preset({"width": 2848, "height": 1600}, str(sample))
         self.assertTrue(r["matched"], f"已知壁布样本应命中: {r}")
         self.assertIn(r["preset"], ("textile_damask", "textile_damask_photo"))

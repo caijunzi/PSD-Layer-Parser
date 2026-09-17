@@ -1,0 +1,21 @@
+{
+  "version": "v2-20260917",
+  "description": "材质家族训练类目体系 v2（单一真相源）。T1 训练管线（tools/train_material_classifier.py）与本文件为类目定义依据；规则判别器 v1（material_classifier.py）暂缺 青绿设色/织物壁布_数码稿 两族，由 T1 训练模型补齐。",
+  "decision_log": [
+    "2026-09-17：青绿设色 自 宣纸水墨 独立成族（用户拍板）",
+    "2026-09-17：西洋绘画 暂含 油画+湿壁画（用户拍板：暂合族，样本充足后可再拆）",
+    "2026-09-17：织物壁布 拆 实物照/数码稿 两个训练类（决定 preset 推荐的关键区分）"
+  ],
+  "families": [
+    {"id": "金地屏风", "description": "日本金地屏风绘（金箔底/绫边装裱/墨绘+朱印题跋）", "preset": "japanese_screen_gold", "seed_samples": 2},
+    {"id": "纸本水墨", "description": "纸本水墨/淡设色（平远、一河两岸等构图）", "preset": "chinese_ink_landscape_ai", "seed_samples": 1},
+    {"id": "青绿设色", "description": "青绿/工笔重设色山水（松石亭阁、敷色浓丽）", "preset": "chinese_ink_landscape_ai", "seed_samples": 2},
+    {"id": "绢本工笔", "description": "绢本工笔花鸟/走禽（仿古绢底）", "preset": "chinese_ink_landscape_ai", "seed_samples": 2},
+    {"id": "西洋绘画", "description": "油画/湿壁画/蛋彩（暂合族）", "preset": "western_oil_painting", "seed_samples": 1},
+    {"id": "织物壁布_实物照", "description": "壁布/面料实物拍摄样品（有拍摄特征：卷边/斜摄/高光）", "preset": "textile_damask_photo", "seed_samples": 3},
+    {"id": "织物壁布_数码稿", "description": "可平铺无缝数码纹样稿（无拍摄特征，满幅重复）", "preset": "textile_damask", "seed_samples": 1},
+    {"id": "其他", "description": "负样本/未知（分类器拒识目标：照片/3D/漫画等无关图）", "preset": null, "seed_samples": 0}
+  ],
+  "target_per_family": 15,
+  "ideal_per_family": 25
+}

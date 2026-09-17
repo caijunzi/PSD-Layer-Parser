@@ -174,7 +174,7 @@ def _recommend_preset(dimensions: Optional[dict],
 
     ⚠️ 曾踩的坑（勿回退）：早期把「**样块检测**」放在最前并单独决定品类 —— 而
     带绫边外框的**金地屏风**的四条直边恰好满足"长直边持续性"判据，被误判为
-    「实物样块」→ 推荐成壁布 preset（实测 `inputs/source_4000.jpg` 中招）。
+    「实物样块」→ 推荐成壁布 preset（实测 `inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg` 中招）。
     故现在样块检测**只用于织物族的置信度增强**，不单独决定品类。
     """
     result = {"preset": None, "confidence": 0.0, "matched": False,

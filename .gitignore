@@ -40,3 +40,6 @@ webui/data/
 # 前端构建产物与 vite 临时文件（2026-09-16 追加：`npm run build` 产物不应入库）
 webui/frontend/dist/
 webui/frontend/vite.config.ts.timestamp-*.mjs
+
+# 材质分类器训练语料（本地投喂，不入库；金标准仍在 inputs/）
+inputs_training/

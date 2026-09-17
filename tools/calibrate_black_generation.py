@@ -22,7 +22,7 @@
     python tools/calibrate_black_generation.py --input inputs/damask_sample.png \\
         --preset presets/textile_damask_photo.json
     # 或显式指定
-    python tools/calibrate_black_generation.py --input inputs/source_4000.jpg \\
+    python tools/calibrate_black_generation.py --input inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg \\
         --icc profiles/CoatedFOGRA39.icc --condition iso_uncoated
 """
 from __future__ import annotations

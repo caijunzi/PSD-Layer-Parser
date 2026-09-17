@@ -10,7 +10,7 @@
 - 复用 tools/calibrate_density_bands.py 的 p60→p95 墨迹带口径。
 
 用法（CLI）：
-    python -m engine.adaptive.auto_tune inputs/source_4000.jpg
+    python -m engine.adaptive.auto_tune inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg
 """
 from __future__ import annotations
 

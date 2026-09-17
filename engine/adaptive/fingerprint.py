@@ -110,7 +110,7 @@ def _extract_global_features(image: np.ndarray, w: int, h: int) -> Dict:
 
     # 中心「主体区」统计（去掉外框 15%）——修复 2026-09-15：
     # 扫描件外框常是博物馆灰底/桌面，用它估计"背景材质"会完全失真
-    # （实测 source_4000.jpg 外框 L37.3/b0.0，而画心金地是 L80/b38）。
+    # （实测金地屏风旗舰图（原 source_4000.jpg）外框 L37.3/b0.0，而画心金地是 L80/b38）。
     # 因此补充中心区统计，供材质判别优先使用；不加入 vector，避免改变 embedding 维度。
     my, mx = int(h * 0.15), int(w * 0.15)
     if (h - 2 * my) > 0 and (w - 2 * mx) > 0:

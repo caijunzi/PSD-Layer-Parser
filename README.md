@@ -149,7 +149,7 @@ preset` 映射，样本实测 **10/10 正确**（此前只用宽高比，油画/
 > **任何方案下都不得放宽 ④/⑤ 阈值来凑通过**（本次为真实通过，非放宽）。
 >
 > **`textile_damask` 去留定案（2026-09-16，真·可平铺纹样实测）**：用户新增
-> `inputs/平铺壁布纹样图.jpeg`（2048×2048 循环纹样）验证后**保留该 preset**：
+> `inputs/可平铺纹样_灰米大马士革团花_无缝数码稿.jpeg`（2048×2048 循环纹样）验证后**保留该 preset**：
 > - **正向**：DINO 真实检出 **`02_巴洛克团花` 159,944px**（神经掩模，非规则兜底）；
 >   重建后的 allowlist 正确保留团花+折缝（112,640px）、拒绝屏风系外来内容类目；
 >   产物 7 层；**已知残余：④ 内容承载 2.817%**（经两项修复自 9.477% 降至此，仍超 2% 门限，见下）。
@@ -213,7 +213,7 @@ python main.py
 
 ### 1. 全流程端到端 16K 母版生产
 ```bash
-python -u run_universal_engine.py --input inputs/source_4000.jpg --output outputs/Rosetsu_Master_16k.psb --preset japanese_screen_gold --scale 4.0 --dpi 150.0 --profile robust_performance
+python -u run_universal_engine.py --input inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg --output outputs/Rosetsu_Master_16k.psb --preset japanese_screen_gold --scale 4.0 --dpi 150.0 --profile robust_performance
 ```
 
 ### 2. 生产交付物印前规范解析验证
@@ -331,6 +331,6 @@ python pipeline/06_verify_psb.py --file <psb>         # 印前结构校验
 前端 `tsc --noEmit` + `vite build` 通过）。**ICC 黑版生成曲线已按品类调优落地**
 （`engine/core/black_generation.py` + `tools/calibrate_black_generation.py`；**7 个 preset 均已补
 `icc_path`** —— 此前仅 `japanese_screen_gold` 有，其余 PLATE 跑批 K≡0 无真黑版）。
-遗留：`inputs/` 样本集已换代（原 `damask_sample.png` 移除，改用 `工艺壁布-1/2/3.jpeg` 织物特写照）；
+遗留：`inputs/` 样本集已换代（原 `damask_sample.png` 移除，改用 `壁布实物照_*.jpeg` 织物特写照）；
 实测反馈：新样本被 `/api/upload` 推荐为 `japanese_screen_gold`（无样块 → 回落宽高比判断），
 如需按"工艺壁布"推荐可再扩启发式。

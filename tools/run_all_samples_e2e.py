@@ -13,12 +13,12 @@ sys.path.insert(0, str(ROOT))
 OUT = Path(os.environ.get("ULS_E2E_OUT", str(ROOT / "outputs" / "adaptive-e2e-20260915-final")))
 CASES = [
     ("damask_sample.png", "textile_damask", "plate", "壁布"),
-    ("source_4000.jpg", "japanese_screen_gold", "plate", "金地原图"),
-    ("生成类似风格商用图--1.png", "japanese_screen_gold", "plate", "金地商用图"),
-    ("宋代写意山水画创作.jpeg", "chinese_ink_landscape_ai", "design", "宋代水墨"),
-    ("明代写意山水画创作.jpeg", "chinese_ink_landscape_ai", "design", "明代水墨"),
-    ("元代.png", "chinese_ink_landscape_ai", "design", "元代水墨"),
-    ("油画.jpeg", "western_oil_painting", "design", "油画"),
+    ("金地屏风_江户芦雁寒林六曲_绫边装裱.jpg", "japanese_screen_gold", "plate", "金地原图"),
+    ("金地屏风_钓舟芦雁仿琳派_深框商用图.png", "japanese_screen_gold", "plate", "金地商用图"),
+    ("青绿山水_松亭瀑布渔舟_纸本设色.jpeg", "chinese_ink_landscape_ai", "design", "宋代水墨"),
+    ("青绿山水_草亭雅集秋景_纸本设色.jpeg", "chinese_ink_landscape_ai", "design", "明代水墨"),
+    ("纸本水墨_平远枯树亭阁_淡设色.png", "chinese_ink_landscape_ai", "design", "元代水墨"),
+    ("西洋壁画_乔托风圣母圣人群像_湿壁画金底.jpeg", "western_oil_painting", "design", "油画"),
     # 绢本工笔（花鸟题材：牡丹/枝叶/禽鸟/山石/水面）与壁布 preset 的类目
     # （巴洛克团花/金箔卷草纹样）完全不匹配 —— 2026-09-16 实测：用 textile_damask
     # 跑绢本时 AI 检测对壁布类目零产出、规则引擎退回屏风系，
@@ -26,8 +26,8 @@ CASES = [
     # 改用 chinese_ink_landscape_ai（含 trees_vegetation / fauna_geese / plum_blossom /
     # mountains_cliffs / water_ripples 等花鸟+山水类目）后 8 维全过：
     # ④ lost_ratio 8.712% → 0.004%，⑤ rmse_lowfreq 26.72 → 1.86。
-    ("绢本工笔画-1.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 1"),
-    ("绢本工笔画-2.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 2"),
+    ("绢本工笔_牡丹双雀_仿古绢底.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 1"),
+    ("绢本工笔_锦鸡鸳鸯松石_仿古绢底.jpeg", "chinese_ink_landscape_ai", "design", "绢本工笔真值 2"),
 ]
 
 def sha(path):

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from engine.providers.inpainting_provider import LaMaInpaintingProvider
 
-SRC = "inputs/source_4000.jpg"
+SRC = "inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg"
 
 
 ROI_PAD = 48  # 与 _inpainting_provider.inpaint() 的 pad 一致

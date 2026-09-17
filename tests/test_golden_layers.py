@@ -138,7 +138,7 @@ class TestGoldenScreenGold(unittest.TestCase):
         必须全部被检测到（2026-09-16 启用——以脱敏的真实归档为受控夹具）。
 
         夹具 `tests/fixtures/episode_chinese_ink_golden.json` 来自一次真实引擎运行
-        （chinese_ink_landscape_ai / 宋代写意 / design，8 维审计通过，路径已脱敏）。
+        （chinese_ink_landscape_ai / 青绿山水_松亭瀑布渔舟_纸本设色 / design，8 维审计通过，路径已脱敏）。
         此前该测试永久 skipTest——因为归档在 gitignore 的 outputs/ 里；现以夹具入库，
         离线即可验证「core 类目不得静默漏检」。
         """

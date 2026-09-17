@@ -18,7 +18,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-# 默认参数（原型实测校准：source_4000.jpg 金地屏风）
+# 默认参数（原型实测校准：金地屏风旗舰图（原 source_4000.jpg））
 DEFAULT_GOLD_PERCENTILE = 88
 DEFAULT_SIGMA = 4.0
 DEFAULT_FLOOR = 0.12

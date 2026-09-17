@@ -24,7 +24,7 @@ def run_step1(seed: int):
     from engine.providers.grounded_sam_provider import GroundedSAMProvider
 
     preset = load_preset("japanese_screen_gold")
-    src = cv2.imread("inputs/source_4000.jpg")
+    src = cv2.imread("inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg")
     gs = GroundedSAMProvider(preferred_device="GPU.1", preset_name="japanese_screen_gold")
     t0 = time.time()
     masks = gs.segment_objects(src, classes=preset.get("ai_semantic_classes"))

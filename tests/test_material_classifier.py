@@ -1,6 +1,6 @@
 """材质判别回归测试（2026-09-15 金地修复）。
 
-背景：扫描件外框是博物馆灰底（实测 source_4000.jpg 外框 L37/b0），
+背景：扫描件外框是博物馆灰底（实测 金地屏风_江户芦雁寒林六曲_绫边装裱.jpg 外框 L37/b0），
 而画心金地是 L80/b38；旧规则用外框当"背景"，导致金地屏风被误判为油画布。
 修复：金地规则改用中心主体区统计（fingerprint.center_median_LAB）。
 """
@@ -74,7 +74,7 @@ class TestGoldScreenClassification(unittest.TestCase):
     def test_ink_wash_landscape_is_ink_paper(self):
         """写意水墨山水（淡黄纸地 + 稀疏笔触）→ 宣纸水墨，而非绢本工笔。
 
-        实测样本 inputs/宋代写意山水画创作.jpeg：中心 L69.8 b15.0 edge0.132 glcm0.236。
+        实测样本 inputs/青绿山水_松亭瀑布渔舟_纸本设色.jpeg：中心 L69.8 b15.0 edge0.132 glcm0.236。
         """
         fp = _fp(bg=(81.6, 2.0, 20.0), center=(69.8, 1.0, 15.0), sat=16.2, csat=14.5,
                  edge=0.132, glcm=0.236)
@@ -94,7 +94,7 @@ class TestGoldScreenClassification(unittest.TestCase):
     def test_ming_ink_wash_is_ink_not_silk(self):
         """明代写意山水（稀疏 + glcm 偏高）→ 宣纸水墨，**不得**判为绢本工笔。
 
-        实测 inputs/明代写意山水画创作.jpeg：中心 L84.3 b13.0 edge0.1229 glcm0.325。
+        实测 inputs/青绿山水_草亭雅集秋景_纸本设色.jpeg：中心 L84.3 b13.0 edge0.1229 glcm0.325。
         关键：glcm 项须以 edge 稠密为前提（否则被误判绢本）。
         """
         fp = _fp(bg=(87.5, 0.0, 15.0), center=(84.3, 0.0, 13.0), sat=14.0, csat=14.1,
@@ -105,7 +105,7 @@ class TestGoldScreenClassification(unittest.TestCase):
     def test_oil_painting_is_oil_canvas(self):
         """油画（高饱和 + 厚重笔触 + 低 GLCM）→ 油画布。
 
-        实测 inputs/油画.jpeg：中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159。
+        实测 inputs/西洋壁画_乔托风圣母圣人群像_湿壁画金底.jpeg：中心 L52.2 a7.0 b27.0 sat28.1 edge0.241 glcm0.159。
         """
         fp = _fp(bg=(63.9, 4.0, 16.0), center=(52.2, 7.0, 27.0), sat=27.0, csat=28.1,
                  edge=0.241, glcm=0.159)
@@ -118,7 +118,7 @@ class TestGoldScreenClassification(unittest.TestCase):
 class TestFabricWallcoveringClassification(unittest.TestCase):
     """织物壁布族（2026-09-16 新增）。
 
-    背景：分类器此前只有 4 个绘画族，`inputs/工艺壁布-*.jpeg`（绗缝织物实物照）
+    背景：分类器此前只有 4 个绘画族，`inputs/壁布实物照_*.jpeg`（绗缝织物实物照）
     被强行塞进绘画族 —— 实测三张**全被误判为「宣纸水墨」**，进而推荐错的 preset。
     织物判据 = **近中性**（sat<15 且 b*<15 合取），与四种绘画基材正交。
     """
@@ -127,9 +127,9 @@ class TestFabricWallcoveringClassification(unittest.TestCase):
         """三张工艺壁布真值（中心区实测值）必须判为「织物壁布」。"""
         cases = [
             # (tag, center(L,a,b), center_sat, edge, glcm)
-            ("工艺壁布-1", (45.9, 2.0, 7.0), 7.1, 0.133, 0.173),
-            ("工艺壁布-2", (69.0, 1.0, 9.0), 10.7, 0.385, 0.207),
-            ("工艺壁布-3", (84.3, 0.0, 5.0), 7.0, 0.098, 0.325),
+            ("壁布实物照_深灰菱块卷草刺绣", (45.9, 2.0, 7.0), 7.1, 0.133, 0.173),
+            ("壁布实物照_灰米提花大马士革团花", (69.0, 1.0, 9.0), 10.7, 0.385, 0.207),
+            ("壁布实物照_米白缎面玫瑰刺绣", (84.3, 0.0, 5.0), 7.0, 0.098, 0.325),
         ]
         for tag, center, csat, edge, glcm in cases:
             fp = _fp(bg=center, center=center, sat=csat, csat=csat, edge=edge, glcm=glcm,
@@ -183,9 +183,9 @@ class TestFabricClassificationOnRealFiles(unittest.TestCase):
         from engine.core.io_utils import imread_unicode
         from engine.adaptive.fingerprint import extract_fingerprint
         d = ENGINE_ROOT / "inputs"
-        files = sorted(d.glob("工艺壁布-*.jpeg"))
+        files = sorted(d.glob("壁布实物照_*.jpeg"))
         if not files:
-            self.skipTest("缺少 inputs/工艺壁布-*.jpeg")
+            self.skipTest("缺少 inputs/壁布实物照_*.jpeg")
         checked = 0
         for p in files:
             img = imread_unicode(str(p))

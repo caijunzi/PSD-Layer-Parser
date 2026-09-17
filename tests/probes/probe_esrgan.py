@@ -26,7 +26,7 @@ def high_freq_energy(img: np.ndarray) -> float:
 
 
 def main() -> int:
-    src_full = cv2.imread("inputs/source_4000.jpg")
+    src_full = cv2.imread("inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg")
     h, w = src_full.shape[:2]
     y0, x0 = (h - CROP) // 2, (w - CROP) // 2
     src = src_full[y0:y0 + CROP, x0:x0 + CROP].copy()

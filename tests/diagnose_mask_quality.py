@@ -5,7 +5,7 @@
 
 用法：
     python tests/diagnose_mask_quality.py
-    python tests/diagnose_mask_quality.py --source inputs/source_4000.jpg --json
+    python tests/diagnose_mask_quality.py --source inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg --json
 
 判定口径（后续将固化为回归断言）：
     - fill_ratio（有效像素 / 全画幅）应落在 [0.001%, 15%]
@@ -30,7 +30,7 @@ from engine.providers.segmentation_provider import ZeroHardcodeSegmentationProvi
 from engine.providers.grounded_sam_provider import GroundedSAMProvider  # noqa: E402
 
 BASELINE_DIR = "masks_16k"
-DEFAULT_SOURCE = "inputs/source_4000.jpg"
+DEFAULT_SOURCE = "inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg"
 
 # 判定阈值（后续迁入 presets/ 或 schemas/）
 FILL_RATIO_MIN = 0.00001   # 0.001%：低于此值视为空层缺陷

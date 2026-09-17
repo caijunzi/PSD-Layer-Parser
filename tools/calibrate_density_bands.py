@@ -1,7 +1,7 @@
 """密度参数校准工具：对金标准图分析密度分布，推荐 density_band / floor 参数。
 
 用法：
-    python tools/calibrate_density_bands.py inputs/source_4000.jpg
+    python tools/calibrate_density_bands.py inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg
 
 输出：
 - 全局密度分位数与直方图（saved to scratch/calib_density_hist.png）

@@ -140,7 +140,7 @@ class TestMaterialClassifier(unittest.TestCase):
     def test_classify_real_silk_truth_samples(self):
         """真实绢本工笔样本不得落入宣纸水墨。"""
         root = Path(__file__).parent.parent / "inputs"
-        for name in ("绢本工笔画-1.jpeg", "绢本工笔画-2.jpeg"):
+        for name in ("绢本工笔_牡丹双雀_仿古绢底.jpeg", "绢本工笔_锦鸡鸳鸯松石_仿古绢底.jpeg"):
             image = cv2.imdecode(np.fromfile(str(root / name), dtype=np.uint8), cv2.IMREAD_COLOR)
             self.assertIsNotNone(image, name)
             family, conf = classify_material_family(

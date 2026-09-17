@@ -51,7 +51,7 @@ class TestHonestMetrics(unittest.TestCase):
         return build_manifest(
             run_id="test-1",
             output_mode=mode,
-            source_path="inputs/source_4000.jpg",
+            source_path="inputs/金地屏风_江户芦雁寒林六曲_绫边装裱.jpg",
             source_wh=(4000, 1952),
             output_path="outputs/x.psb",
             output_wh=(16000, 7808),
