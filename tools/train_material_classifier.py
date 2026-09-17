@@ -134,8 +134,10 @@ def train(X, y) -> dict:
     from sklearn.metrics import classification_report, confusion_matrix
     from sklearn.model_selection import train_test_split
 
+    from collections import Counter as _C
+    strat = y if min(_C(y).values()) >= 2 else None  # 单样本族无法分层 → 退化为随机切分
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=HOLDOUT_RATIO,
-                                          random_state=RANDOM_STATE, stratify=y)
+                                          random_state=RANDOM_STATE, stratify=strat)
     clf = GradientBoostingClassifier(random_state=RANDOM_STATE)
     clf.fit(Xtr, ytr)
     yp = clf.predict(Xte)
